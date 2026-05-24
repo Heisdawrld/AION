@@ -21,6 +21,7 @@ import type {
   TestResultOutput,
   Feature,
   UserStory,
+  BusinessActionType,
 } from '@/lib/types/aion';
 
 const MAX_CYCLES = 100;
@@ -631,12 +632,71 @@ async function determineNextAction(state: any): Promise<NextAction> {
     };
   }
 
-  // Priority 6: If deployed and live, we're done
+  // Priority 6: If deployed and live, check if Business Agent has run post-launch tasks
   if (state.liveUrl && state.status === 'live') {
+    // Check if Business Agent has already generated README and deployment notification
+    const recentBizActivity = await db.agentLog.findFirst({
+      where: {
+        projectId: state.projectId,
+        agentRole: 'business',
+        action: { in: ['generate_readme', 'deployment_notification'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!recentBizActivity) {
+      // Business Agent hasn't run post-launch tasks yet — generate README and notify
+      console.log(`[AION Orchestrator] Project is LIVE — triggering Business Agent post-launch tasks (README + notification)`);
+      return {
+        type: 'run_agent',
+        agent: 'business',
+        task: 'The project has just been deployed and is LIVE! Generate a comprehensive README.md for the project and create a deployment notification announcement. Include the live URL, features shipped, and next steps.',
+      };
+    }
+
+    // Check if there's a pending README generation task
+    const readmeTask = await db.task.findFirst({
+      where: {
+        projectId: state.projectId,
+        assignedTo: 'business',
+        status: 'pending',
+        description: { contains: 'readme' },
+      },
+    });
+
+    if (readmeTask) {
+      await boardManager.updateTaskStatus(readmeTask.id, 'in_progress');
+      return {
+        type: 'run_agent',
+        agent: 'business',
+        task: buildTaskInstruction('business', readmeTask.description),
+      };
+    }
+
     return {
       type: 'complete',
       message: '🎉 Project is LIVE and deployed!',
     };
+  }
+
+  // Priority 7: If deploying (just started), Business Agent generates a status report
+  if (state.status === 'deploying') {
+    const bizReportCheck = await db.agentLog.findFirst({
+      where: {
+        projectId: state.projectId,
+        agentRole: 'business',
+        action: 'status_report',
+      },
+    });
+
+    if (!bizReportCheck && state.completedTaskCount > 0) {
+      console.log(`[AION Orchestrator] Project is deploying — Business Agent generating pre-deployment status report`);
+      return {
+        type: 'run_agent',
+        agent: 'business',
+        task: 'The project is being deployed. Generate a project status report summarizing what was built, what features are included, and the current health of the project.',
+      };
+    }
   }
 
   // Fallback: Run CTO to figure out what's next
@@ -654,7 +714,7 @@ async function determineNextAction(state: any): Promise<NextAction> {
 function buildTaskInstruction(agentRole: AgentRole, taskDescription: string): string {
   switch (agentRole) {
     case 'business':
-      return `${taskDescription}\n\nCreate a detailed PRD with: problem statement, target users, core features with user stories and acceptance criteria, MVP features, post-MVP features, and success criteria.`;
+      return `${taskDescription}\n\nAs the Business Strategist, handle this task appropriately. If creating a PRD: include problem statement, target users, core features with user stories and acceptance criteria, MVP features, post-MVP features, and success criteria. If generating a README: use real project data, include tech stack, features, getting started guide, and deployment info. If generating a status report: use real metrics, feature tracking, and risk assessment. If creating a deployment notification: include live URL, shipped features, and next steps.`;
 
     case 'frontend':
       return `${taskDescription}\n\nBuild React components using TypeScript, Tailwind CSS, and shadcn/ui patterns. Return ALL file changes in the "files" array with path, content, action, and description. List any new npm dependencies needed and API endpoints you need from the backend.`;
@@ -722,13 +782,73 @@ export async function processAgentResponse(
   }
 
   // ========================================
-  // Handle Business Agent — Save PRD (Enhanced extraction)
+  // Handle Business Agent — Save PRD, README, and lifecycle outputs
+  // Enhanced with: README writing, deployment notifications, status reports
   // ========================================
   if (agentId === 'business') {
+    // Save PRD if generated
     const prd = extractPRDFromResponse(response, '');
     if (prd) {
       await boardManager.updatePRD(projectId, prd);
       console.log(`[AION Orchestrator] PRD saved/updated for project ${projectId} — ${prd.coreFeatures?.length || 0} features, ${prd.mvpFeatures?.length || 0} MVP`);
+    }
+
+    // Write Business Agent files to disk (README.md, docs)
+    if (output.files && output.files.length > 0) {
+      try {
+        await workspaceManager.writeFiles(
+          projectId,
+          output.files.map(f => ({ path: f.path, content: f.content }))
+        );
+        await boardManager.writeFiles(
+          projectId,
+          output.files.map(f => ({
+            path: f.path,
+            content: f.content,
+            createdBy: 'business',
+          }))
+        );
+        filesWritten += output.files.length;
+        console.log(`[AION Orchestrator] Business: Wrote ${output.files.length} file(s) to disk (README, docs, etc.)`);
+      } catch (error: any) {
+        console.error(`[AION Orchestrator] Business: Failed to write files:`, error.message);
+      }
+    }
+
+    // Handle post-launch Business Agent actions
+    // If the project is live and Business Agent just ran, generate deployment notification
+    const project = await db.project.findUnique({ where: { id: projectId } });
+    if (project?.status === 'live' && project.liveUrl) {
+      // Check if we already sent a deployment notification
+      const existingNotification = await db.agentLog.findFirst({
+        where: {
+          projectId,
+          agentRole: 'business',
+          action: 'deployment_notification',
+        },
+      });
+
+      if (!existingNotification) {
+        // Broadcast deployment notification from the Business Agent
+        const prdData = prd || (project.prd ? JSON.parse(project.prd) : null);
+        const mvpFeatures = prdData?.mvpFeatures || [];
+        const notificationMessage = `🎉 ${prdData?.projectName || project.name} is LIVE!\n\n` +
+          `🔗 URL: ${project.liveUrl}\n` +
+          `📦 MVP Features: ${mvpFeatures.length > 0 ? mvpFeatures.join(', ') : 'Core functionality'}\n` +
+          `${prdData?.postMvpFeatures?.length ? `📋 Post-MVP (coming soon): ${prdData.postMvpFeatures.slice(0, 5).join(', ')}\n` : ''}` +
+          `\nNext: Gather user feedback and iterate on post-MVP features.`;
+
+        await boardManager.saveConversationMessage(projectId, {
+          role: 'system',
+          content: notificationMessage,
+          agentRole: 'business',
+          metadata: {
+            actionType: 'deployment_notification',
+            liveUrl: project.liveUrl,
+          },
+        });
+        console.log(`[AION Orchestrator] Deployment notification broadcast for project ${projectId}`);
+      }
     }
   }
 

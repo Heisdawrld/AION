@@ -43,7 +43,7 @@ export const AGENT_WRITE_ACCESS: Record<AgentRole, string[]> = {
   backend: ['fileManifest:backend'],
   qa: ['testResults', 'openBugs', 'resolvedBugs', 'agentLog'],
   devops: ['buildStatus', 'deployStatus', 'githubStatus', 'liveUrl', 'urlTestResult', 'agentLog'],
-  business: ['prd', 'userStories', 'mvpScope', 'agentLog'],
+  business: ['prd', 'userStories', 'mvpScope', 'agentLog', 'readme', 'statusReports', 'deploymentNotifications'],
 };
 
 export const AGENT_DENIED_ACCESS: Record<AgentRole, string[]> = {
@@ -386,4 +386,128 @@ export interface DeploymentResult {
   warnings: string[];
   checklist: DevOpsChecklist;
   summary: string;
+}
+
+// ============================================================
+// BUSINESS TYPES (Business Agent — Phase 5)
+// ============================================================
+
+export type BusinessActionType =
+  | 'create_prd'
+  | 'revise_prd'
+  | 'generate_readme'
+  | 'status_report'
+  | 'deployment_notification'
+  | 'feature_tracking'
+  | 'risk_assessment'
+  | 'stakeholder_summary';
+
+export interface FeatureTrackingResult {
+  /** Total features defined in PRD */
+  totalFeatures: number;
+  /** MVP features marked as done */
+  mvpFeaturesComplete: number;
+  /** MVP features still pending/in-progress */
+  mvpFeaturesRemaining: number;
+  /** Post-MVP features completed */
+  postMvpFeaturesComplete: number;
+  /** Percentage of MVP features complete (0-100) */
+  mvpCompletionPercent: number;
+  /** Percentage of all features complete (0-100) */
+  overallCompletionPercent: number;
+  /** Per-feature status breakdown */
+  featureStatuses: FeatureStatusEntry[];
+  /** Assessment of whether MVP is on track */
+  mvpReadiness: 'on_track' | 'at_risk' | 'behind' | 'complete';
+  /** What's blocking MVP completion, if anything */
+  blockers: string[];
+}
+
+export interface FeatureStatusEntry {
+  featureName: string;
+  isMvp: boolean;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  status: 'not_started' | 'in_progress' | 'complete' | 'blocked';
+  hasBugs: boolean;
+  userStoriesComplete: number;
+  userStoriesTotal: number;
+}
+
+export interface ProjectStatusReport {
+  /** Project name and summary */
+  projectName: string;
+  /** Current project status */
+  status: ProjectStatus;
+  /** Human-readable summary of what's happened */
+  summary: string;
+  /** Feature tracking against the PRD */
+  featureTracking: FeatureTrackingResult;
+  /** Key metrics */
+  metrics: ProjectMetrics;
+  /** Top risks and concerns */
+  risks: RiskEntry[];
+  /** What's been accomplished recently */
+  recentAccomplishments: string[];
+  /** What needs to happen next */
+  nextSteps: string[];
+  /** Overall health assessment */
+  health: 'healthy' | 'warning' | 'critical';
+  /** Timestamp */
+  generatedAt: string;
+}
+
+export interface ProjectMetrics {
+  totalTasks: number;
+  completedTasks: number;
+  pendingTasks: number;
+  failedTasks: number;
+  openBugs: number;
+  criticalBugs: number;
+  totalFiles: number;
+  totalAgentCycles: number;
+  daysSinceCreation: number;
+  /** Average confidence across agent responses */
+  averageConfidence: number;
+}
+
+export interface RiskEntry {
+  description: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  category: 'schedule' | 'quality' | 'scope' | 'technical' | 'resource';
+  mitigation: string;
+}
+
+export interface DeploymentNotification {
+  /** Project name */
+  projectName: string;
+  /** Live URL */
+  liveUrl: string;
+  /** Platform deployed to */
+  platform: string;
+  /** When it went live */
+  deployedAt: string;
+  /** What features are included */
+  mvpFeaturesIncluded: string[];
+  /** Known issues / post-MVP items */
+  knownLimitations: string[];
+  /** Non-technical summary for stakeholders */
+  stakeholderSummary: string;
+  /** Next milestone */
+  nextMilestone: string;
+}
+
+export interface READMEContent {
+  /** The full markdown content */
+  markdown: string;
+  /** Sections included */
+  sections: string[];
+}
+
+export interface BusinessReportOutput {
+  actionType: BusinessActionType;
+  statusReport?: ProjectStatusReport;
+  featureTracking?: FeatureTrackingResult;
+  deploymentNotification?: DeploymentNotification;
+  readme?: READMEContent;
+  risks?: RiskEntry[];
 }

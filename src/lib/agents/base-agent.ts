@@ -214,10 +214,11 @@ export abstract class BaseAgent {
         return ['src/components/', 'src/app/', 'public/', 'globals.css'];
       case 'backend':
         return ['src/app/api/', 'prisma/', 'src/lib/server/', 'src/lib/db.ts'];
+      case 'business':
+        return ['README.md', 'docs/']; // Business agent writes README and docs
       case 'cto':
       case 'qa':
       case 'devops':
-      case 'business':
         return []; // Non-code agents don't write files directly
       default:
         return [];
