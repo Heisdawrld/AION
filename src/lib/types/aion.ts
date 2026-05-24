@@ -348,3 +348,42 @@ export interface ChatResponse {
   cycleCount?: number;
   conversationId?: string;
 }
+
+// ============================================================
+// DEVOPS TYPES (Deployment Pipeline — Phase 4)
+// ============================================================
+
+export interface DevOpsChecklist {
+  projectInitialized: boolean;
+  dependenciesInstalled: boolean;
+  buildSucceeds: boolean;
+  gitInitialized: boolean;
+  gitCommitted: boolean;
+  readyForGithub: boolean;
+  deploymentConfigured: boolean;
+  readyForDeploy: boolean;
+  urlReturns200: boolean;
+  urlContainsExpectedContent: boolean;
+}
+
+export interface GitOperationResult {
+  success: boolean;
+  operation: 'init' | 'add' | 'commit' | 'push';
+  message: string;
+  duration: number;
+  error?: string;
+}
+
+export interface DeploymentResult {
+  success: boolean;
+  platform: string;
+  buildVerified: boolean;
+  gitReady: boolean;
+  urlTested: boolean;
+  urlTestResult?: UrlTestResult;
+  deploymentUrl?: string;
+  errors: string[];
+  warnings: string[];
+  checklist: DevOpsChecklist;
+  summary: string;
+}

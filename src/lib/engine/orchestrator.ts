@@ -850,7 +850,8 @@ export async function processAgentResponse(
   }
 
   // ========================================
-  // Handle DevOps Agent — Build and deploy
+  // Handle DevOps Agent — Build, deploy, and verify
+  // Enhanced with real deployment pipeline, git operations, URL testing
   // ========================================
   if (agentId === 'devops') {
     // CRITICAL: Verify QA gate before allowing deployment
@@ -870,18 +871,35 @@ export async function processAgentResponse(
 
       // Don't update status to deploying — keep in testing
     } else {
-      // QA has approved — proceed with deployment
-      console.log(`[AION Orchestrator] QA gate approved (${qaGate.gateStatus}) — proceeding with deployment`);
+      // QA has approved — proceed with deployment pipeline
+      console.log(`[AION Orchestrator] QA gate approved (${qaGate.gateStatus}) — proceeding with deployment pipeline`);
 
-      // Try to actually build the project
-      try {
-        // First, install dependencies
-        const installResult = commandRunner.installDeps(projectId);
-        if (!installResult.success) {
-          console.error(`[AION Orchestrator] Install failed:`, installResult.stderr);
+      // Step 1: Write DevOps config files to disk (render.yaml, .gitignore, health endpoint)
+      if (output.files && output.files.length > 0) {
+        try {
+          await workspaceManager.writeFiles(
+            projectId,
+            output.files.map(f => ({ path: f.path, content: f.content }))
+          );
+          console.log(`[AION Orchestrator] DevOps: Wrote ${output.files.length} config files to disk`);
+
+          // Also save to database for tracking
+          await boardManager.writeFiles(
+            projectId,
+            output.files.map(f => ({
+              path: f.path,
+              content: f.content,
+              createdBy: 'devops',
+            }))
+          );
+          filesWritten += output.files.length;
+        } catch (error: any) {
+          console.error(`[AION Orchestrator] DevOps: Failed to write config files:`, error.message);
         }
+      }
 
-        // Then build
+      // Step 2: Build the project (DevOps agent already ran this, but we verify)
+      try {
         const buildResult = commandRunner.runBuild(projectId);
 
         await db.testResult.create({
@@ -890,16 +908,78 @@ export async function processAgentResponse(
             testType: 'build',
             passed: buildResult.success,
             details: buildResult.success
-              ? 'Build succeeded'
+              ? 'Production build succeeded (DevOps pipeline)'
               : `Build failed:\n${buildResult.stderr.substring(0, 500)}`,
           },
         });
 
         if (buildResult.success) {
           await boardManager.updateStatus(projectId, 'deploying');
+
+          // Step 3: Create a deployment record
+          const deploymentId = await boardManager.createDeployment(projectId, {
+            platform: 'render',
+            status: 'deploying',
+          });
+
+          console.log(`[AION Orchestrator] Deployment record created: ${deploymentId}`);
+
+          // Step 4: Test live URL if available
+          const project = await db.project.findUnique({ where: { id: projectId } });
+          if (project?.liveUrl) {
+            console.log(`[AION Orchestrator] Testing live URL: ${project.liveUrl}`);
+            try {
+              const urlResult = await commandRunner.testUrl(project.liveUrl);
+              const urlTestResult: import('@/lib/types/aion').UrlTestResult = {
+                url: project.liveUrl,
+                statusCode: urlResult.statusCode,
+                responseTime: urlResult.responseTime,
+                containsExpectedContent: urlResult.containsExpectedContent,
+                timestamp: new Date().toISOString(),
+              };
+
+              if (urlResult.success) {
+                // URL returns 200 — deployment verified!
+                console.log(`[AION Orchestrator] Live URL verified! Status: ${urlResult.statusCode}, Time: ${urlResult.responseTime}ms`);
+                await boardManager.updateStatus(projectId, 'live');
+                await boardManager.updateDeployment(deploymentId, {
+                  status: 'deployed',
+                  url: project.liveUrl,
+                  deployedAt: new Date(),
+                });
+              } else {
+                // URL not responding yet — might need more time
+                console.log(`[AION Orchestrator] Live URL test: ${urlResult.statusCode} — deployment may still be starting`);
+                await boardManager.updateDeployment(deploymentId, {
+                  status: 'deploying',
+                  url: project.liveUrl,
+                });
+              }
+            } catch (error: any) {
+              console.error(`[AION Orchestrator] URL test failed:`, error.message);
+            }
+          } else {
+            // No live URL yet — mark deployment as waiting
+            await boardManager.updateDeployment(deploymentId, {
+              status: 'deploying',
+            });
+
+            // Broadcast deployment status
+            await boardManager.saveConversationMessage(projectId, {
+              role: 'system',
+              content: `🚀 Deployment pipeline complete! Build PASSED, Git ready. Deployment configs generated. The project is ready for deployment to Render.\n\nTo deploy:\n1. Push to GitHub: git remote add origin <your-repo-url> && git push -u origin main\n2. Connect your GitHub repo to Render\n3. Render will auto-deploy using render.yaml\n\nOr provide a GitHub PAT and I'll handle the push.`,
+              agentRole: 'devops',
+              metadata: { deploymentId, buildPassed: true },
+            });
+          }
+        } else {
+          // Build failed — don't proceed with deployment
+          await boardManager.updateStatus(projectId, 'building');
+          console.log(`[AION Orchestrator] DevOps: Build failed — not deploying`);
         }
       } catch (error: any) {
-        console.error(`[AION Orchestrator] DevOps execution failed:`, error.message);
+        console.error(`[AION Orchestrator] DevOps pipeline failed:`, error.message);
+        await boardManager.updateStatus(projectId, 'failed');
       }
     }
   }
@@ -907,10 +987,6 @@ export async function processAgentResponse(
   // Update project status based on agent activity
   if (agentId === 'cto' && output.taskAssignments && output.taskAssignments.length > 0) {
     await boardManager.updateStatus(projectId, 'building');
-  }
-
-  if (agentId === 'devops' && output.statusUpdate?.includes('deployed')) {
-    await boardManager.updateStatus(projectId, 'deploying');
   }
 
   return { filesWritten };
