@@ -13,6 +13,8 @@ import type {
   MarketDataPoint,
   TechnicalReference,
 } from '@/lib/types/aion';
+import { headlessBrowser } from '@/lib/engine/headless-browser';
+import { agentMemory } from '@/lib/engine/agent-memory';
 import ZAI from 'z-ai-web-dev-sdk';
 
 // ============================================================
@@ -120,9 +122,23 @@ export class ResearchAnalystAgent extends BaseAgent {
   }
 
   /**
-   * MAIN EXECUTE — Full research pipeline with real web search and scraping
+   * MAIN EXECUTE — Full research pipeline with real web search, headless browsing, and scraping
+   * Enhanced with: Headless Browser for deep site crawling, Agent Memory for pattern recognition
    */
   async execute(task: string, context: string): Promise<AgentResponse> {
+    const projectIdMatch = context.match(/PROJECT:\s*(\S+)/);
+    const projectId = projectIdMatch ? projectIdMatch[1] : null;
+
+    // ========================================
+    // STEP 0: Recall past research memories
+    // ========================================
+    let memoryContext = '';
+    try {
+      memoryContext = await agentMemory.buildMemoryContext('research', task);
+    } catch (error: any) {
+      console.warn('[AION Research] Memory recall failed:', error.message);
+    }
+
     // ========================================
     // STEP 1: Extract research queries from task
     // ========================================
@@ -146,33 +162,115 @@ export class ResearchAnalystAgent extends BaseAgent {
     const uniqueResults = this.deduplicateResults(allSearchResults);
 
     // ========================================
-    // STEP 3: Scrape top relevant URLs
+    // STEP 3: Use Headless Browser for deep crawling top sites
     // ========================================
     const scrapedContent: ScrapedContent[] = [];
     const topUrls = uniqueResults
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
-      .slice(0, 5); // Scrape top 5 most relevant
+      .slice(0, 3); // Deep-crawl top 3 most relevant sites
 
-    for (const result of topUrls) {
+    if (projectId && topUrls.length > 0) {
+      // Use headless browser for structured browsing with link extraction
       try {
-        const content = await this.scrapeUrl(result.url);
-        if (content) {
-          scrapedContent.push(content);
+        const session = headlessBrowser.createSession(projectId);
+        console.log(`[AION Research] Created headless browser session ${session.id} for deep crawling`);
+
+        for (const result of topUrls) {
+          try {
+            const pageResult = await headlessBrowser.navigate(session.id, result.url, {
+              maxContentLength: 8000,
+            });
+
+            if (pageResult.success && pageResult.data) {
+              const page = pageResult.data as any;
+              scrapedContent.push({
+                url: result.url,
+                title: page.title || result.title,
+                content: page.content || '',
+                wordCount: page.wordCount || 0,
+                scrapedAt: new Date().toISOString(),
+              });
+
+              // Follow important links from the page (crawl deeper)
+              if (page.links && page.links.length > 0) {
+                const relevantLinks = page.links
+                  .filter((link: any) => link.href && link.href.startsWith('http'))
+                  .slice(0, 3); // Follow top 3 internal links
+
+                for (const link of relevantLinks) {
+                  try {
+                    const subResult = await headlessBrowser.navigate(session.id, link.href, {
+                      maxContentLength: 5000,
+                    });
+                    if (subResult.success && subResult.data) {
+                      const subPage = subResult.data as any;
+                      scrapedContent.push({
+                        url: link.href,
+                        title: subPage.title || link.text || '',
+                        content: subPage.content || '',
+                        wordCount: subPage.wordCount || 0,
+                        scrapedAt: new Date().toISOString(),
+                      });
+                    }
+                  } catch {
+                    // Skip failed sub-pages
+                  }
+                }
+              }
+            }
+          } catch (error: any) {
+            console.error(`[AION Research] Headless browse failed for ${result.url}:`, error.message);
+            // Fallback to basic scraping
+            const content = await this.scrapeUrl(result.url);
+            if (content) scrapedContent.push(content);
+          }
         }
+
+        // End the session
+        headlessBrowser.endSession(session.id);
       } catch (error: any) {
-        console.error(`[AION Research] Scrape failed for ${result.url}:`, error.message);
+        console.error('[AION Research] Headless browser session failed:', error.message);
+        // Fallback to basic scraping for all top URLs
+        for (const result of topUrls) {
+          try {
+            const content = await this.scrapeUrl(result.url);
+            if (content) scrapedContent.push(content);
+          } catch {}
+        }
+      }
+    } else {
+      // No projectId or no top URLs — use basic scraping
+      for (const result of topUrls) {
+        try {
+          const content = await this.scrapeUrl(result.url);
+          if (content) scrapedContent.push(content);
+        } catch (error: any) {
+          console.error(`[AION Research] Scrape failed for ${result.url}:`, error.message);
+        }
       }
     }
 
+    // Also scrape remaining top URLs (4-5) with basic scraping
+    const remainingUrls = uniqueResults
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(3, 6);
+
+    for (const result of remainingUrls) {
+      try {
+        const content = await this.scrapeUrl(result.url);
+        if (content) scrapedContent.push(content);
+      } catch {}
+    }
+
     // ========================================
-    // STEP 4: Build enhanced context with real data
+    // STEP 4: Build enhanced context with real data + memory
     // ========================================
-    const enhancedContext = this.buildResearchContext(context, uniqueResults, scrapedContent);
+    const enhancedContext = this.buildResearchContext(context, uniqueResults, scrapedContent, memoryContext);
 
     // ========================================
     // STEP 5: Send to AI for analysis
     // ========================================
-    const userMessage = `RESEARCH DATA (REAL WEB SEARCH RESULTS + SCRAPED CONTENT):\n${enhancedContext}\n\nYOUR RESEARCH TASK:\n${task}`;
+    const userMessage = `RESEARCH DATA (REAL WEB SEARCH RESULTS + SCRAPED CONTENT + PAST MEMORIES):\n${enhancedContext}\n\nYOUR RESEARCH TASK:\n${task}`;
 
     const result = await this.callAgentAI<ResearchOutput>(userMessage);
 
@@ -182,6 +280,32 @@ export class ResearchAnalystAgent extends BaseAgent {
     }
 
     const data = result.data;
+
+    // ========================================
+    // STEP 6: Store findings in agent memory for future tasks
+    // ========================================
+    try {
+      if (data.output?.keyFindings && data.output.keyFindings.length > 0) {
+        await agentMemory.storeMemory({
+          agentRole: 'research',
+          category: 'task_pattern',
+          pattern: `Research on: ${task.substring(0, 100)}`,
+          resolution: data.output.keyFindings.slice(0, 5).join('; '),
+          confidence: data.confidence || 0.7,
+          projectId: projectId || undefined,
+        });
+      }
+      if (data.output?.competitorInsights && data.output.competitorInsights.length > 0) {
+        await agentMemory.storeProjectContext(
+          projectId || 'global',
+          'competitor_insights',
+          JSON.stringify(data.output.competitorInsights.slice(0, 5)),
+          'research'
+        );
+      }
+    } catch (error: any) {
+      console.warn('[AION Research] Memory store failed:', error.message);
+    }
 
     return this.createResponse(
       'research-task',
@@ -304,9 +428,18 @@ export class ResearchAnalystAgent extends BaseAgent {
   private buildResearchContext(
     baseContext: string,
     searchResults: WebSearchResult[],
-    scrapedContent: ScrapedContent[]
+    scrapedContent: ScrapedContent[],
+    memoryContext?: string
   ): string {
     const parts: string[] = [baseContext];
+
+    // Add memory context if available
+    if (memoryContext && memoryContext.length > 10) {
+      parts.push('\n========================================');
+      parts.push('PAST RESEARCH MEMORIES (LEARNED FROM PREVIOUS TASKS):');
+      parts.push('========================================');
+      parts.push(memoryContext);
+    }
 
     if (searchResults.length > 0) {
       parts.push('\n========================================');

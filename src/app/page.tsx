@@ -369,6 +369,14 @@ export default function AIONHome() {
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1 text-xs"
+              onClick={() => router.push('/dashboard')}
+            >
+              <LayoutDashboard className="w-3 h-3" /> Projects
+            </Button>
             <Badge variant={projectStatus === 'live' ? 'default' : 'secondary'} className="text-xs">
               {projectStatus === 'idle' ? 'Ready' : projectStatus === 'live' ? '🟢 Live' : `⚡ ${projectStatus}`}
             </Badge>

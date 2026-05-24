@@ -30,6 +30,7 @@ model Project {
   agentLogs    AgentLog[]
   deployments  Deployment[]
   conversations ConversationMessage[]
+  costEntries  AICostEntry[]
 }
 
 model Task {
@@ -128,4 +129,83 @@ model ConversationMessage {
   createdAt   DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// AGENT MEMORY SYSTEM
+// ============================================================
+
+model AgentMemoryEntry {
+  id          String    @id @default(cuid())
+  agentRole   String
+  category    String    // task_pattern | error_resolution | project_context | general
+  pattern     String    // The pattern, key information, or error signature
+  resolution  String?   // How it was resolved or the approach taken
+  confidence  Float     @default(0.5)
+  projectId   String?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime? // null = permanent (error resolutions never expire)
+}
+
+model AgentTaskPattern {
+  id          String    @id @default(cuid())
+  agentRole   String
+  taskType    String    // Category of task (e.g., "component_creation", "api_route", "schema_design")
+  approach    String    // What approach was taken
+  outcome     String    // success | failure | partial
+  confidence  Float     @default(0.5)
+  frequency   Int       @default(1) // How many times this pattern was encountered/used
+  projectId   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  expiresAt   DateTime? // Task patterns expire after 30 days by default
+}
+
+model AgentErrorResolution {
+  id            String   @id @default(cuid())
+  agentRole     String
+  errorPattern  String   // The error signature or pattern (searchable)
+  resolution    String   // How it was fixed
+  workedCount   Int      @default(0) // Times this resolution worked
+  failedCount   Int      @default(0) // Times this resolution failed
+  projectId     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model AgentProjectContext {
+  id          String   @id @default(cuid())
+  projectId   String
+  key         String
+  value       String
+  updatedBy   String   // agent role that set this context
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([projectId, key])
+}
+
+model AICostEntry {
+  id           String   @id @default(cuid())
+  projectId    String?
+  agentRole    String
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  duration     Int      // milliseconds
+  estimatedCost Int     // cost in cents (hundredths of USD) to avoid floating-point issues
+  taskSnippet  String?
+  createdAt    DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model BudgetConfig {
+  id             String   @id @default(cuid())
+  projectId      String?  @unique // null = global budget
+  dailyLimit     Int      // cents
+  monthlyLimit   Int      // cents
+  alertThreshold Float    @default(0.8) // 0-1, alert when cost reaches this fraction of limit
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
