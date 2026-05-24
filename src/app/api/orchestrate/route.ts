@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
-import { runOrchestrationStep, runAutonomousCycle, checkQAGate } from '@/lib/engine/orchestrator';
+import { runOrchestrationStep, runAutonomousCycle, runFullAutonomousPipeline, checkQAGate } from '@/lib/engine/orchestrator';
 import { workspaceManager } from '@/lib/engine/workspace-manager';
 import { commandRunner } from '@/lib/engine/command-runner';
 import { db } from '@/lib/db';

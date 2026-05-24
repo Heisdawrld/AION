@@ -1,7 +1,8 @@
-// AION — Enhanced Orchestrator
+// AION — Enhanced Orchestrator (Phase 6: Autonomous Loop)
 // The autonomous loop that drives agent execution
-// This is the HEART of AION — now with real file system integration
-// and QA VALIDATION GATE enforcement (nothing deploys without QA sign-off)
+// This is the HEART of AION — now with real file system integration,
+// QA VALIDATION GATE enforcement, and FULLY AUTONOMOUS operation.
+// Phase 6 adds: runFullAutonomousPipeline, stuck detection, auto-deps, progress callbacks.
 
 import { db } from '@/lib/db';
 import { boardManager } from './board-manager';
@@ -26,6 +27,8 @@ import type {
 
 const MAX_CYCLES = 100;
 const MIN_CONFIDENCE = 0.4; // Lowered to allow agents to proceed with moderate confidence
+const MAX_SAME_AGENT_REPEATS = 4; // If same agent runs same action 4+ times, we're stuck
+const DEPENDENCY_INSTALL_COOLDOWN = 60_000; // 1 min between auto-installs
 
 export interface OrchestratorResult {
   success: boolean;
@@ -45,6 +48,41 @@ export interface OrchestrationStep {
   response: AgentResponse;
   filesWritten: number;
   duration: number;
+}
+
+// ============================================================
+// PHASE 6: Autonomous Loop Types
+// ============================================================
+
+/** Callback for real-time progress updates during autonomous execution */
+export type ProgressCallback = (event: AutonomousProgressEvent) => void;
+
+export interface AutonomousProgressEvent {
+  type: 'step_start' | 'step_complete' | 'phase_change' | 'stuck_detected' | 'deps_installing' | 'complete' | 'error';
+  stepNumber: number;
+  totalSteps?: number;
+  agentRole?: AgentRole;
+  task?: string;
+  status?: string;
+  message: string;
+  timestamp: string;
+  data?: Record<string, any>;
+}
+
+export interface AutonomousPipelineResult extends OrchestratorResult {
+  totalSteps: number;
+  totalDuration: number;
+  stuckDetected: boolean;
+  stuckRecoveries: number;
+  dependenciesInstalled: number;
+  phase: string;
+}
+
+/** Tracks recent agent actions for stuck detection */
+interface AgentActionRecord {
+  agentRole: AgentRole;
+  taskSnippet: string; // First 60 chars of task
+  timestamp: number;
 }
 
 /**
@@ -359,28 +397,75 @@ export async function runOrchestrationStep(projectId: string): Promise<Orchestra
 /**
  * Run multiple orchestration steps in sequence
  * This enables the autonomous loop — agents work continuously
+ * ENHANCED (Phase 6): Stuck detection, auto-deps, progress callbacks
  */
 export async function runAutonomousCycle(
   projectId: string,
-  maxSteps: number = 5
+  maxSteps: number = 5,
+  onProgress?: ProgressCallback
 ): Promise<OrchestratorResult> {
   const allResponses: AgentResponse[] = [];
   let finalResult: OrchestratorResult | null = null;
+  const recentActions: AgentActionRecord[] = [];
+  let lastDepInstallTime = 0;
+  let stuckRecoveries = 0;
 
   for (let step = 0; step < maxSteps; step++) {
+    // Emit progress event
+    onProgress?.({
+      type: 'step_start',
+      stepNumber: step + 1,
+      totalSteps: maxSteps,
+      message: `Starting orchestration step ${step + 1}/${maxSteps}`,
+      timestamp: new Date().toISOString(),
+    });
+
     const result = await runOrchestrationStep(projectId);
 
     allResponses.push(...result.agentResponses);
     finalResult = result;
 
+    // Track agent actions for stuck detection
+    if (result.agentResponses.length > 0) {
+      const resp = result.agentResponses[0];
+      recentActions.push({
+        agentRole: resp.agentId,
+        taskSnippet: resp.output?.statusUpdate?.substring(0, 60) || '',
+        timestamp: Date.now(),
+      });
+
+      // Only keep last 10 actions for stuck detection
+      if (recentActions.length > 10) {
+        recentActions.shift();
+      }
+    }
+
+    // Emit step complete
+    const mainResp = result.agentResponses[0];
+    onProgress?.({
+      type: 'step_complete',
+      stepNumber: step + 1,
+      totalSteps: maxSteps,
+      agentRole: mainResp?.agentId,
+      status: mainResp?.status,
+      message: mainResp?.output?.statusUpdate || result.message,
+      timestamp: new Date().toISOString(),
+    });
+
     // Stop conditions
     if (!result.success && result.agentResponses.length === 0) {
-      // Max cycles or error with no responses
       break;
     }
 
     if (result.projectStatus === 'live') {
-      // Project is done!
+      onProgress?.({
+        type: 'complete',
+        stepNumber: step + 1,
+        totalSteps: maxSteps,
+        message: 'Project is LIVE!',
+        timestamp: new Date().toISOString(),
+        data: { liveUrl: result.liveUrl },
+      });
       break;
     }
 
@@ -393,6 +478,77 @@ export async function runAutonomousCycle(
     if (result.agentResponses.length === 0) {
       break;
     }
+
+    // ========================================
+    // PHASE 6: Stuck detection and recovery
+    // ========================================
+    if (isStuck(recentActions)) {
+      stuckRecoveries++;
+      console.warn(`[AION Orchestrator] STUCK DETECTED — same agent repeating. Recovery #${stuckRecoveries}`);
+
+      onProgress?.({
+        type: 'stuck_detected',
+        stepNumber: step + 1,
+        message: `Stuck pattern detected. Attempting recovery #${stuckRecoveries}.`,
+        timestamp: new Date().toISOString(),
+        data: { recentActions: recentActions.slice(-4) },
+      });
+
+      // Recovery: Force CTO to reassess
+      const ctoAgent = getAgent('cto');
+      const ctoContext = await boardManager.buildAgentContext(projectId, 'cto');
+      try {
+        const recoveryResult = await ctoAgent.execute(
+          `STUCK RECOVERY: The autonomous loop detected that the same agent is repeating the same action without making progress. Recent actions: ${JSON.stringify(recentActions.slice(-4).map(a => ({ agent: a.agentRole, task: a.taskSnippet })))}. Assess the project state and either: (1) Create NEW tasks to unblock progress, (2) Mark blocked tasks as failed so we can move on, or (3) Suggest a different approach. Be decisive.`,
+          ctoContext
+        );
+        await processAgentResponse(projectId, recoveryResult);
+        allResponses.push(recoveryResult);
+
+        // Clear the stuck pattern by clearing recent actions
+        recentActions.length = 0;
+      } catch (error: any) {
+        console.error('[AION Orchestrator] Stuck recovery failed:', error.message);
+      }
+
+      // If we've recovered too many times, give up
+      if (stuckRecoveries >= 3) {
+        console.error('[AION Orchestrator] Max stuck recoveries reached. Stopping.');
+        break;
+      }
+    }
+
+    // ========================================
+    // PHASE 6: Auto dependency install after file writes
+    // ========================================
+    if (mainResp?.output?.files && mainResp.output.files.length > 0) {
+      const now = Date.now();
+      const timeSinceLastInstall = now - lastDepInstallTime;
+
+      if (timeSinceLastInstall >= DEPENDENCY_INSTALL_COOLDOWN) {
+        onProgress?.({
+          type: 'deps_installing',
+          stepNumber: step + 1,
+          message: `Installing dependencies after ${mainResp.output.files.length} file writes...`,
+          timestamp: new Date().toISOString(),
+        });
+
+        try {
+          // Sync DB files to disk first
+          await workspaceManager.syncToDisk(projectId);
+          const installResult = commandRunner.installDeps(projectId);
+          lastDepInstallTime = Date.now();
+
+          if (installResult.success) {
+            console.log('[AION Orchestrator] Auto-dependency install succeeded');
+          } else {
+            console.warn('[AION Orchestrator] Auto-dependency install failed:', installResult.stderr.substring(0, 200));
+          }
+        } catch (error: any) {
+          console.error('[AION Orchestrator] Auto-deps install error:', error.message);
+        }
+      }
+    }
   }
 
   return finalResult || {
@@ -401,6 +557,280 @@ export async function runAutonomousCycle(
     agentResponses: allResponses,
     projectStatus: 'building',
   };
+}
+
+// ============================================================
+// PHASE 6: Full Autonomous Pipeline — From idea to LIVE in one call
+// ============================================================
+
+/**
+ * Run the ENTIRE project lifecycle autonomously:
+ * 1. Kickoff (PRD + CTO plan + workspace init)
+ * 2. Build all tasks (backend → frontend → QA loop)
+ * 3. Deploy (DevOps pipeline)
+ * 4. Post-launch (README + notification)
+ *
+ * This is the "ship it" button. One call, zero manual steps.
+ */
+export async function runFullAutonomousPipeline(
+  projectId: string,
+  userIdea: string,
+  maxSteps: number = 50,
+  onProgress?: ProgressCallback
+): Promise<AutonomousPipelineResult> {
+  const pipelineStart = Date.now();
+  let totalSteps = 0;
+  let stuckRecoveries = 0;
+  let dependenciesInstalled = 0;
+  let stuckDetected = false;
+
+  // ========================================
+  // PHASE 1: Kickoff
+  // ========================================
+  onProgress?.({
+    type: 'phase_change',
+    stepNumber: 0,
+    message: 'Starting autonomous pipeline — Phase 1: Planning',
+    timestamp: new Date().toISOString(),
+    data: { phase: 'planning' },
+  });
+
+  const kickoffResult = await kickoffProject(projectId, userIdea);
+  totalSteps += kickoffResult.agentResponses.length;
+
+  if (!kickoffResult.success) {
+    return {
+      ...kickoffResult,
+      totalSteps,
+      totalDuration: Date.now() - pipelineStart,
+      stuckDetected: false,
+      stuckRecoveries: 0,
+      dependenciesInstalled: 0,
+      phase: 'planning',
+    };
+  }
+
+  onProgress?.({
+    type: 'step_complete',
+    stepNumber: totalSteps,
+    message: kickoffResult.message,
+    timestamp: new Date().toISOString(),
+    data: { phase: 'planning', taskCount: kickoffResult.agentResponses.length },
+  });
+
+  // ========================================
+  // PHASE 2: Build (autonomous cycle with stuck detection)
+  // ========================================
+  onProgress?.({
+    type: 'phase_change',
+    stepNumber: totalSteps,
+    message: 'Phase 2: Building — agents working autonomously',
+    timestamp: new Date().toISOString(),
+    data: { phase: 'building' },
+  });
+
+  const recentActions: AgentActionRecord[] = [];
+  let lastDepInstallTime = 0;
+  let buildStepsRemaining = maxSteps - totalSteps;
+
+  for (let step = 0; step < buildStepsRemaining; step++) {
+    const state = await boardManager.getProjectState(projectId);
+
+    // Check if we've moved to a different phase
+    if (state?.status === 'live') {
+      onProgress?.({
+        type: 'complete',
+        stepNumber: totalSteps + step,
+        message: 'Project is LIVE!',
+        timestamp: new Date().toISOString(),
+        data: { liveUrl: state.liveUrl, phase: 'live' },
+      });
+      break;
+    }
+
+    if (state?.status === 'testing' || state?.status === 'deploying') {
+      onProgress?.({
+        type: 'phase_change',
+        stepNumber: totalSteps + step,
+        message: `Phase transition: project is now ${state.status}`,
+        timestamp: new Date().toISOString(),
+        data: { phase: state.status },
+      });
+    }
+
+    // Safety: check max cycles
+    if (state && state.totalCycles >= MAX_CYCLES) {
+      onProgress?.({
+        type: 'error',
+        stepNumber: totalSteps + step,
+        message: 'Max agent cycles reached. Stopping autonomous pipeline.',
+        timestamp: new Date().toISOString(),
+      });
+      break;
+    }
+
+    // Emit progress
+    onProgress?.({
+      type: 'step_start',
+      stepNumber: totalSteps + step + 1,
+      totalSteps: maxSteps,
+      message: `Build step ${step + 1}/${buildStepsRemaining}`,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Run one step
+    const result = await runOrchestrationStep(projectId);
+    totalSteps++;
+
+    // Track actions for stuck detection
+    if (result.agentResponses.length > 0) {
+      const resp = result.agentResponses[0];
+      recentActions.push({
+        agentRole: resp.agentId,
+        taskSnippet: resp.output?.statusUpdate?.substring(0, 60) || '',
+        timestamp: Date.now(),
+      });
+      if (recentActions.length > 10) recentActions.shift();
+    }
+
+    // Stuck detection
+    if (isStuck(recentActions)) {
+      stuckDetected = true;
+      stuckRecoveries++;
+
+      onProgress?.({
+        type: 'stuck_detected',
+        stepNumber: totalSteps,
+        message: `Stuck pattern detected. Recovery attempt #${stuckRecoveries}.`,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Force CTO reassessment
+      try {
+        const ctoAgent = getAgent('cto');
+        const ctoContext = await boardManager.buildAgentContext(projectId, 'cto');
+        const recoveryResult = await ctoAgent.execute(
+          `STUCK RECOVERY in autonomous pipeline. Agent loop is repeating. Recent: ${JSON.stringify(recentActions.slice(-4).map(a => ({ agent: a.agentRole, task: a.taskSnippet })))}. Take decisive action: create new tasks, fail blocked ones, or suggest a different approach.`,
+          ctoContext
+        );
+        await processAgentResponse(projectId, recoveryResult);
+        recentActions.length = 0;
+      } catch (error: any) {
+        console.error('[AION Pipeline] Stuck recovery failed:', error.message);
+      }
+
+      if (stuckRecoveries >= 3) {
+        onProgress?.({
+          type: 'error',
+          stepNumber: totalSteps,
+          message: 'Max stuck recoveries (3) reached. Stopping pipeline.',
+          timestamp: new Date().toISOString(),
+        });
+        break;
+      }
+    }
+
+    // Auto-dep install after file writes
+    const mainResp = result.agentResponses[0];
+    if (mainResp?.output?.files && mainResp.output.files.length > 0) {
+      const now = Date.now();
+      if (now - lastDepInstallTime >= DEPENDENCY_INSTALL_COOLDOWN) {
+        onProgress?.({
+          type: 'deps_installing',
+          stepNumber: totalSteps,
+          message: `Auto-installing deps after ${mainResp.output.files.length} file writes...`,
+          timestamp: new Date().toISOString(),
+        });
+
+        try {
+          await workspaceManager.syncToDisk(projectId);
+          const installResult = commandRunner.installDeps(projectId);
+          lastDepInstallTime = now;
+          dependenciesInstalled++;
+          console.log(`[AION Pipeline] Auto-deps install #${dependenciesInstalled}: ${installResult.success ? 'OK' : 'FAILED'}`);
+        } catch (error: any) {
+          console.error('[AION Pipeline] Auto-deps error:', error.message);
+        }
+      }
+    }
+
+    // Stop if project went live
+    if (result.projectStatus === 'live') {
+      onProgress?.({
+        type: 'complete',
+        stepNumber: totalSteps,
+        message: `Project is LIVE after ${totalSteps} steps!`,
+        timestamp: new Date().toISOString(),
+        data: { liveUrl: result.liveUrl },
+      });
+      break;
+    }
+
+    // Stop on hard failures
+    if (!result.success && result.agentResponses.length === 0) {
+      onProgress?.({
+        type: 'error',
+        stepNumber: totalSteps,
+        message: `Pipeline stopped: ${result.message}`,
+        timestamp: new Date().toISOString(),
+      });
+      break;
+    }
+  }
+
+  // ========================================
+  // Get final state
+  // ========================================
+  const finalState = await boardManager.getProjectState(projectId);
+
+  return {
+    success: finalState?.status === 'live' || finalState?.status === 'deploying',
+    message: finalState?.status === 'live'
+      ? `Autonomous pipeline complete — project is LIVE at ${finalState.liveUrl || 'URL pending'}`
+      : `Autonomous pipeline stopped at ${finalState?.status || 'unknown'} after ${totalSteps} steps`,
+    agentResponses: [],
+    projectStatus: finalState?.status || 'building',
+    liveUrl: finalState?.liveUrl || undefined,
+    cycleCount: finalState?.totalCycles,
+    totalSteps,
+    totalDuration: Date.now() - pipelineStart,
+    stuckDetected,
+    stuckRecoveries,
+    dependenciesInstalled,
+    phase: getPhaseLabel(finalState),
+  };
+}
+
+// ============================================================
+// STUCK DETECTION — Detects when the same agent loops
+// ============================================================
+
+/**
+ * Detect if the autonomous loop is stuck by checking if the same agent
+ * has repeated the same action multiple times in a row.
+ * Pattern: same agentRole appears 4+ times in the last N actions.
+ */
+function isStuck(actions: AgentActionRecord[]): boolean {
+  if (actions.length < MAX_SAME_AGENT_REPEATS) return false;
+
+  // Check the last N actions
+  const recent = actions.slice(-MAX_SAME_AGENT_REPEATS);
+  const firstAgent = recent[0].agentRole;
+  const allSameAgent = recent.every(a => a.agentRole === firstAgent);
+
+  if (!allSameAgent) return false;
+
+  // Same agent repeating — check if task snippets are similar
+  const snippets = recent.map(a => a.taskSnippet);
+  const uniqueSnippets = new Set(snippets);
+
+  // If they're all doing basically the same thing, we're stuck
+  if (uniqueSnippets.size <= 2) {
+    console.warn(`[AION Orchestrator] Stuck pattern: ${firstAgent} repeated ${recent.length} times with ${uniqueSnippets.size} unique tasks`);
+    return true;
+  }
+
+  return false;
 }
 
 /**
