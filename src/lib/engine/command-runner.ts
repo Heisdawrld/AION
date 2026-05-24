@@ -1,10 +1,13 @@
 // AION — Command Runner
 // Executes shell commands in project workspaces safely.
 // Used for npm install, npm run build, and other operations.
+// Vercel-compatible: gracefully degrades in serverless environment.
 
-import { execSync } from 'child_process';
 import { workspaceManager } from './workspace-manager';
 import type { GitOperationResult, DevOpsChecklist } from '@/lib/types/aion';
+
+// Vercel serverless detection
+const IS_VERCEL = process.env.VERCEL === '1';
 
 export interface CommandResult {
   success: boolean;
@@ -17,8 +20,20 @@ export interface CommandResult {
 export class CommandRunner {
   /**
    * Run a command in a project's workspace directory
+   * Gracefully returns error in serverless environments
    */
   runInWorkspace(projectId: string, command: string, options?: { timeout?: number }): CommandResult {
+    if (IS_VERCEL) {
+      return {
+        success: false,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Command execution not available in serverless environment. Deploy on a VPS or Railway/Fly.io for full terminal access.',
+        duration: 0,
+      };
+    }
+
+    const { execSync } = require('child_process');
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
     const timeout = options?.timeout || 120000; // 2 min default
     const startTime = Date.now();
@@ -141,6 +156,10 @@ export class CommandRunner {
    * Initialize a git repository in the workspace
    */
   gitInit(projectId: string): GitOperationResult {
+    if (IS_VERCEL) {
+      return { success: false, operation: 'init', message: 'Git not available in serverless', duration: 0, error: 'serverless' };
+    }
+    const { execSync } = require('child_process');
     const startTime = Date.now();
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
@@ -189,6 +208,10 @@ export class CommandRunner {
    * Stage all files for commit
    */
   gitAdd(projectId: string, files: string = '.'): GitOperationResult {
+    if (IS_VERCEL) {
+      return { success: false, operation: 'add', message: 'Git not available in serverless', duration: 0, error: 'serverless' };
+    }
+    const { execSync } = require('child_process');
     const startTime = Date.now();
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
@@ -220,6 +243,10 @@ export class CommandRunner {
    * Commit staged changes
    */
   gitCommit(projectId: string, message: string): GitOperationResult {
+    if (IS_VERCEL) {
+      return { success: false, operation: 'commit', message: 'Git not available in serverless', duration: 0, error: 'serverless' };
+    }
+    const { execSync } = require('child_process');
     const startTime = Date.now();
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
@@ -272,6 +299,10 @@ export class CommandRunner {
    * Requires a remote to be configured first
    */
   gitPush(projectId: string, remote: string = 'origin', branch: string = 'main'): GitOperationResult {
+    if (IS_VERCEL) {
+      return { success: false, operation: 'push', message: 'Git not available in serverless', duration: 0, error: 'serverless' };
+    }
+    const { execSync } = require('child_process');
     const startTime = Date.now();
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
@@ -303,6 +334,10 @@ export class CommandRunner {
    * Check git status of the workspace
    */
   gitStatus(projectId: string): { isRepo: boolean; hasChanges: boolean; branch: string; staged: number; unstaged: number; untracked: number } {
+    if (IS_VERCEL) {
+      return { isRepo: false, hasChanges: false, branch: '', staged: 0, unstaged: 0, untracked: 0 };
+    }
+    const { execSync } = require('child_process');
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
     try {

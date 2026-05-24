@@ -1,10 +1,19 @@
 // AION — Terminal API Route
 // Executes arbitrary shell commands in project workspaces.
 // Like having an IDE terminal — but scoped to the project workspace.
+// Graceful fallback on Vercel serverless (no shell access).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { workspaceManager } from '@/lib/engine/workspace-manager';
-import { execSync } from 'child_process';
+
+// Vercel serverless function timeout
+export const maxDuration = 30;
+
+// Check if we're in a serverless environment
+function isServerless(): boolean {
+  // Vercel sets VERCEL=1
+  return process.env.VERCEL === '1';
+}
 
 // ============================================================
 // SAFETY: Blocked commands that could damage the host system
@@ -101,18 +110,45 @@ export async function POST(request: NextRequest) {
     }
 
     // ========================================
+    // SERVERLESS CHECK: No shell access on Vercel
+    // ========================================
+    if (isServerless()) {
+      return NextResponse.json({
+        success: false,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Terminal commands are not available in serverless environment. Deploy AION on a VPS or use Railway/Fly.io for full terminal access.',
+        duration: 0,
+        serverless: true,
+      });
+    }
+
+    // Dynamic import of execSync only when NOT on serverless
+    const { execSync } = await import('child_process');
+
+    // ========================================
     // RESOLVE WORKSPACE PATH
     // ========================================
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
     // Verify workspace exists
-    const workspaceExists = await workspaceManager.workspaceExists(projectId);
-    if (!workspaceExists) {
+    try {
+      const workspaceExists = await workspaceManager.workspaceExists(projectId);
+      if (!workspaceExists) {
+        return NextResponse.json({
+          success: false,
+          exitCode: 1,
+          stdout: '',
+          stderr: `Workspace not found. Initialize the project first.`,
+          duration: 0,
+        });
+      }
+    } catch (fsError: any) {
       return NextResponse.json({
         success: false,
         exitCode: 1,
         stdout: '',
-        stderr: `Workspace not found. Initialize the project first.`,
+        stderr: 'Workspace not accessible in serverless environment.',
         duration: 0,
       });
     }

@@ -8,6 +8,9 @@ import type { AutonomousProgressEvent } from '@/lib/engine/orchestrator';
 
 export const dynamic = 'force-dynamic';
 
+// Vercel serverless function timeout
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('projectId');

@@ -1,13 +1,17 @@
 // AION — Workspace Manager
 // Manages project workspace directories on the filesystem.
 // This is what makes AION real — generated code actually lives on disk.
+// Vercel-compatible: uses /tmp in serverless, cwd/workspaces otherwise.
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 import { db } from '@/lib/db';
 
-const WORKSPACE_ROOT = path.join(process.cwd(), 'workspaces');
+// Vercel serverless has writable /tmp; otherwise use project workspaces
+const IS_VERCEL = process.env.VERCEL === '1';
+const WORKSPACE_ROOT = IS_VERCEL
+  ? path.join('/tmp', 'aion-workspaces')
+  : path.join(process.cwd(), 'workspaces');
 
 export interface WorkspaceInfo {
   projectId: string;
@@ -276,9 +280,16 @@ export class WorkspaceManager {
    * Install npm dependencies in the workspace
    */
   async installDependencies(projectId: string, packages?: string[]): Promise<{ success: boolean; error?: string }> {
+    // No shell access on Vercel serverless
+    if (IS_VERCEL) {
+      console.log('[AION Workspace] Skipping npm install in serverless environment');
+      return { success: false, error: 'Not available in serverless environment' };
+    }
+
     const workspacePath = this.getWorkspacePath(projectId);
 
     try {
+      const { execSync } = await import('child_process');
       if (packages && packages.length > 0) {
         // Install specific packages
         const installCmd = `cd "${workspacePath}" && npm install ${packages.join(' ')} --save 2>&1`;

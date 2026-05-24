@@ -11,6 +11,9 @@ import { kickoffProject, runOrchestrationStep, processAgentResponse } from '@/li
 import { LeadCTOAgent } from '@/lib/agents/lead-cto';
 import { getAgent } from '@/lib/agents/registry';
 
+// Vercel serverless function timeout (max 300s on Pro, 60s on Hobby)
+export const maxDuration = 60;
+
 const ctoAgent = new LeadCTOAgent();
 
 export async function POST(request: NextRequest) {
@@ -42,7 +45,13 @@ export async function POST(request: NextRequest) {
       });
 
       // Kick off the project with the user's idea
-      const result = await kickoffProject(currentProjectId, message);
+      // Wrap in timeout to prevent Vercel function timeout
+      const result = await Promise.race([
+        kickoffProject(currentProjectId, message),
+        new Promise<any>((_, reject) => 
+          setTimeout(() => reject(new Error('Project kickoff timed out — try continuing with Auto Build')), 55000)
+        )
+      ]);
 
       // Save CTO's response to conversation history
       const ctoResponse = result.agentResponses.find(r => r.agentId === 'cto');

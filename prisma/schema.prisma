@@ -1,12 +1,12 @@
 // AION — Autonomous Intelligent Orchestration Network
-// Database Schema
+// Database Schema (PostgreSQL for Vercel deployment)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -124,8 +124,8 @@ model ConversationMessage {
   projectId   String
   role        String   // user | cto | system
   content     String
-  agentRole   String?  // Which agent this message is from (for agent activity broadcasts)
-  metadata    String?  // JSON string for extra data (confidence, taskAssignments, etc.)
+  agentRole   String?  // Which agent this message is from
+  metadata    String?  // JSON string for extra data
   createdAt   DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -144,30 +144,30 @@ model AgentMemoryEntry {
   confidence  Float     @default(0.5)
   projectId   String?
   createdAt   DateTime  @default(now())
-  expiresAt   DateTime? // null = permanent (error resolutions never expire)
+  expiresAt   DateTime? // null = permanent
 }
 
 model AgentTaskPattern {
   id          String    @id @default(cuid())
   agentRole   String
-  taskType    String    // Category of task (e.g., "component_creation", "api_route", "schema_design")
-  approach    String    // What approach was taken
+  taskType    String
+  approach    String
   outcome     String    // success | failure | partial
   confidence  Float     @default(0.5)
-  frequency   Int       @default(1) // How many times this pattern was encountered/used
+  frequency   Int       @default(1)
   projectId   String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  expiresAt   DateTime? // Task patterns expire after 30 days by default
+  expiresAt   DateTime?
 }
 
 model AgentErrorResolution {
   id            String   @id @default(cuid())
   agentRole     String
-  errorPattern  String   // The error signature or pattern (searchable)
-  resolution    String   // How it was fixed
-  workedCount   Int      @default(0) // Times this resolution worked
-  failedCount   Int      @default(0) // Times this resolution failed
+  errorPattern  String
+  resolution    String
+  workedCount   Int      @default(0)
+  failedCount   Int      @default(0)
   projectId     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -178,7 +178,7 @@ model AgentProjectContext {
   projectId   String
   key         String
   value       String
-  updatedBy   String   // agent role that set this context
+  updatedBy   String   // agent role
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -186,16 +186,16 @@ model AgentProjectContext {
 }
 
 model AICostEntry {
-  id           String   @id @default(cuid())
-  projectId    String?
-  agentRole    String
-  model        String
-  inputTokens  Int
-  outputTokens Int
-  duration     Int      // milliseconds
-  estimatedCost Int     // cost in cents (hundredths of USD) to avoid floating-point issues
-  taskSnippet  String?
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  projectId     String?
+  agentRole     String
+  model         String
+  inputTokens   Int
+  outputTokens  Int
+  duration      Int      // milliseconds
+  estimatedCost Int      // cost in cents
+  taskSnippet   String?
+  createdAt     DateTime @default(now())
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
@@ -205,7 +205,7 @@ model BudgetConfig {
   projectId      String?  @unique // null = global budget
   dailyLimit     Int      // cents
   monthlyLimit   Int      // cents
-  alertThreshold Float    @default(0.8) // 0-1, alert when cost reaches this fraction of limit
+  alertThreshold Float    @default(0.8)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }

@@ -9,6 +9,9 @@ import { workspaceManager } from '@/lib/engine/workspace-manager';
 import { commandRunner } from '@/lib/engine/command-runner';
 import { db } from '@/lib/db';
 
+// Vercel serverless function timeout
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -74,42 +77,52 @@ export async function POST(request: NextRequest) {
 
       case 'build': {
         // Run the build in the workspace
-        // First sync DB files to disk
-        await workspaceManager.syncToDisk(projectId);
+        // Graceful fallback for Vercel serverless (no persistent filesystem)
+        try {
+          // First sync DB files to disk
+          await workspaceManager.syncToDisk(projectId);
 
-        // Install dependencies
-        const installResult = commandRunner.installDeps(projectId);
+          // Install dependencies
+          const installResult = commandRunner.installDeps(projectId);
 
-        if (!installResult.success) {
+          if (!installResult.success) {
+            return NextResponse.json({
+              success: false,
+              message: 'Dependency installation failed',
+              error: installResult.stderr.substring(0, 500),
+            });
+          }
+
+          // Run build
+          const buildResult = commandRunner.runBuild(projectId);
+
+          // Save test result
+          await db.testResult.create({
+            data: {
+              projectId,
+              testType: 'build',
+              passed: buildResult.success,
+              details: buildResult.success
+                ? 'Build succeeded'
+                : buildResult.stderr.substring(0, 500),
+            },
+          });
+
+          return NextResponse.json({
+            success: buildResult.success,
+            message: buildResult.success ? 'Build succeeded!' : 'Build failed',
+            stdout: buildResult.stdout.substring(0, 500),
+            stderr: buildResult.stderr.substring(0, 500),
+            duration: buildResult.duration,
+          });
+        } catch (buildError: any) {
+          // Vercel serverless: no persistent filesystem or shell access
           return NextResponse.json({
             success: false,
-            message: 'Dependency installation failed',
-            error: installResult.stderr.substring(0, 500),
+            message: 'Build not available in serverless environment. Use Auto Build from the dashboard on a persistent server.',
+            error: buildError.message,
           });
         }
-
-        // Run build
-        const buildResult = commandRunner.runBuild(projectId);
-
-        // Save test result
-        await db.testResult.create({
-          data: {
-            projectId,
-            testType: 'build',
-            passed: buildResult.success,
-            details: buildResult.success
-              ? 'Build succeeded'
-              : buildResult.stderr.substring(0, 500),
-          },
-        });
-
-        return NextResponse.json({
-          success: buildResult.success,
-          message: buildResult.success ? 'Build succeeded!' : 'Build failed',
-          stdout: buildResult.stdout.substring(0, 500),
-          stderr: buildResult.stderr.substring(0, 500),
-          duration: buildResult.duration,
-        });
       }
 
       case 'status': {
