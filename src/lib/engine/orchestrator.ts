@@ -19,6 +19,8 @@ import type {
   Bug,
   QAGateResult,
   TestResultOutput,
+  Feature,
+  UserStory,
 } from '@/lib/types/aion';
 
 const MAX_CYCLES = 100;
@@ -720,12 +722,13 @@ export async function processAgentResponse(
   }
 
   // ========================================
-  // Handle Business Agent — Save PRD
+  // Handle Business Agent — Save PRD (Enhanced extraction)
   // ========================================
-  if (agentId === 'business' && output.analysis) {
+  if (agentId === 'business') {
     const prd = extractPRDFromResponse(response, '');
     if (prd) {
       await boardManager.updatePRD(projectId, prd);
+      console.log(`[AION Orchestrator] PRD saved/updated for project ${projectId} — ${prd.coreFeatures?.length || 0} features, ${prd.mvpFeatures?.length || 0} MVP`);
     }
   }
 
@@ -994,29 +997,224 @@ export async function processAgentResponse(
 
 /**
  * Extract PRD from a Business Agent response
+ * Enhanced with multiple extraction strategies and robust parsing
  */
 function extractPRDFromResponse(response: AgentResponse, userIdea: string): PRD | null {
-  // Try to find PRD data in the response
   const output = response.output as any;
 
-  // Check if PRD is directly in the output
-  if (output.prd && typeof output.prd === 'object' && output.prd.projectName) {
-    return output.prd as PRD;
+  // Strategy 1: PRD is directly in the output object
+  if (output.prd && typeof output.prd === 'object') {
+    const prd = output.prd;
+    if (prd.projectName || prd.problemStatement) {
+      return normalizePRD(prd, userIdea);
+    }
   }
 
-  // Try to construct a PRD from the analysis
-  if (output.analysis) {
+  // Strategy 2: PRD might be nested inside the statusUpdate or analysis as JSON
+  const textFields = [output.statusUpdate, output.analysis].filter(Boolean);
+  for (const text of textFields) {
+    if (typeof text === 'string') {
+      const extracted = tryParsePRDFromText(text, userIdea);
+      if (extracted) return extracted;
+    }
+  }
+
+  // Strategy 3: Check if output itself looks like a PRD (some AI models put it at the top level)
+  if (output.projectName || output.problemStatement || output.coreFeatures) {
+    return normalizePRD(output, userIdea);
+  }
+
+  // Strategy 4: Try to find PRD-like JSON anywhere in the raw response
+  // This catches cases where the AI wraps the PRD differently
+  const rawOutput = JSON.stringify(output);
+  const prdMatch = rawOutput.match(/"projectName"\s*:\s*"([^"]+)"/);
+  if (prdMatch) {
+    // Found a projectName — try to extract the full PRD object
+    const jsonStart = rawOutput.lastIndexOf('{', rawOutput.indexOf('"projectName"'));
+    if (jsonStart >= 0) {
+      try {
+        // Try to parse from the projectName onwards
+        const subObj = rawOutput.substring(jsonStart);
+        const balanced = findBalancedJSON(subObj);
+        if (balanced) {
+          const parsed = JSON.parse(balanced);
+          if (parsed.projectName) {
+            return normalizePRD(parsed, userIdea);
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // Strategy 5: Construct a minimal PRD from whatever we have
+  if (output.analysis || userIdea) {
     return {
-      projectName: userIdea?.substring(0, 50) || 'AION Project',
-      problemStatement: output.analysis.substring(0, 200),
-      targetUsers: 'General users',
-      coreFeatures: [],
+      projectName: extractProjectName(output.analysis || userIdea),
+      problemStatement: output.analysis?.substring(0, 300) || userIdea?.substring(0, 200) || 'Project to build',
+      targetUsers: extractTargetUsers(output.analysis || '') || 'Users who need this application',
+      coreFeatures: extractFeaturesFromText(output.analysis || '') || [],
       mvpFeatures: [],
       postMvpFeatures: [],
       technicalPreferences: 'Next.js, TypeScript, Tailwind CSS',
-      successCriteria: ['Application builds successfully', 'All features work correctly'],
-      summary: output.analysis.substring(0, 150),
+      successCriteria: ['Application builds and runs successfully', 'Core features work as expected'],
+      summary: output.analysis?.substring(0, 150) || userIdea?.substring(0, 100) || 'A new application',
     };
+  }
+
+  return null;
+}
+
+/**
+ * Normalize a PRD object — fill in missing fields with defaults
+ */
+function normalizePRD(raw: any, userIdea: string): PRD {
+  return {
+    projectName: raw.projectName || extractProjectName(userIdea || 'AION Project'),
+    problemStatement: raw.problemStatement || 'Not specified',
+    targetUsers: raw.targetUsers || extractTargetUsers(raw.problemStatement || '') || 'General users',
+    coreFeatures: Array.isArray(raw.coreFeatures) ? raw.coreFeatures.map((f: any) => normalizeFeature(f)) : [],
+    mvpFeatures: Array.isArray(raw.mvpFeatures) ? raw.mvpFeatures : [],
+    postMvpFeatures: Array.isArray(raw.postMvpFeatures) ? raw.postMvpFeatures : [],
+    technicalPreferences: raw.technicalPreferences || 'Next.js, TypeScript, Tailwind CSS',
+    successCriteria: Array.isArray(raw.successCriteria) ? raw.successCriteria : ['Application builds successfully'],
+    summary: raw.summary || `${raw.projectName || 'Project'} — ${raw.problemStatement?.substring(0, 80) || 'A new application'}`,
+  };
+}
+
+/**
+ * Normalize a feature object
+ */
+function normalizeFeature(raw: any): Feature {
+  return {
+    name: raw.name || 'Unnamed Feature',
+    description: raw.description || '',
+    userStories: Array.isArray(raw.userStories) ? raw.userStories.map((us: any) => normalizeUserStory(us)) : [],
+    priority: ['critical', 'high', 'medium', 'low'].includes(raw.priority) ? raw.priority : 'medium',
+  };
+}
+
+/**
+ * Normalize a user story object
+ */
+function normalizeUserStory(raw: any): UserStory {
+  return {
+    id: raw.id || `US${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    asA: raw.asA || 'user',
+    iWant: raw.iWant || raw.description || 'this feature',
+    soThat: raw.soThat || raw.benefit || 'I can accomplish my goal',
+    acceptanceCriteria: Array.isArray(raw.acceptanceCriteria) ? raw.acceptanceCriteria : ['Feature works as described'],
+  };
+}
+
+/**
+ * Try to parse a PRD from free-form text
+ */
+function tryParsePRDFromText(text: string, userIdea: string): PRD | null {
+  // Look for JSON blocks in the text
+  const jsonMatch = text.match(/\{[\s\S]*?"projectName"[\s\S]*?\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.projectName) return normalizePRD(parsed, userIdea);
+    } catch {}
+  }
+
+  // Look for nested PRD
+  const nestedMatch = text.match(/"prd"\s*:\s*(\{[\s\S]*?"summary"[\s\S]*?\})/);
+  if (nestedMatch) {
+    try {
+      const parsed = JSON.parse(nestedMatch[1]);
+      if (parsed.projectName) return normalizePRD(parsed, userIdea);
+    } catch {}
+  }
+
+  return null;
+}
+
+/**
+ * Extract a project name from text
+ */
+function extractProjectName(text: string): string {
+  // Try common patterns
+  const patterns = [
+    /(?:called|named|title[d]?)\s+"?([^".,\n]+)"?/i,
+    /(?:project|app|application)\s+(?:name[d]?|called)\s+"?([^".,\n]+)"?/i,
+    /^([A-Z][a-zA-Z\s]{2,30})/,  // Starts with capital letter
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1].trim().substring(0, 50);
+  }
+
+  // Fall back to first few words
+  return text.substring(0, 30).split(/\s+/).slice(0, 4).join(' ') || 'AION Project';
+}
+
+/**
+ * Try to extract target users from text
+ */
+function extractTargetUsers(text: string): string | null {
+  const patterns = [
+    /(?:target users?|audience|for)\s*:?\s*([^\n.]{10,80})/i,
+    /(?:who|users?|people)\s+(?:will|would|can|need to)\s+([^\n.]{10,80})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1].trim().substring(0, 100);
+  }
+
+  return null;
+}
+
+/**
+ * Try to extract feature names from text (basic)
+ */
+function extractFeaturesFromText(text: string): Feature[] {
+  const features: Feature[] = [];
+
+  // Look for bullet-pointed or numbered features
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const bulletMatch = trimmed.match(/^[-•*]\s+(.+)/);
+    const numberMatch = trimmed.match(/^\d+[.)]\s+(.+)/);
+
+    const featureText = bulletMatch?.[1] || numberMatch?.[1];
+    if (featureText && featureText.length > 5 && featureText.length < 100) {
+      features.push({
+        name: featureText.substring(0, 50),
+        description: featureText,
+        userStories: [],
+        priority: features.length === 0 ? 'critical' : 'medium',
+      });
+    }
+
+    if (features.length >= 5) break; // Max 5 features from text extraction
+  }
+
+  return features;
+}
+
+/**
+ * Find a balanced JSON object in a string
+ * Returns the substring that forms a complete JSON object
+ */
+function findBalancedJSON(text: string): string | null {
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (text[i] === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        return text.substring(start, i + 1);
+      }
+    }
   }
 
   return null;

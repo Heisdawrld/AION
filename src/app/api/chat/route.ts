@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
 import { kickoffProject, runOrchestrationStep, processAgentResponse } from '@/lib/engine/orchestrator';
 import { LeadCTOAgent } from '@/lib/agents/lead-cto';
+import { getAgent } from '@/lib/agents/registry';
 
 const ctoAgent = new LeadCTOAgent();
 
@@ -170,6 +171,37 @@ export async function POST(request: NextRequest) {
         break;
       }
 
+      case 'prd_query': {
+        // User is asking about PRD/features/requirements → Business agent or CTO responds
+        ctoResult = await ctoAgent.converse(message, conversationHistory, projectContext);
+
+        // If user wants to revise the PRD, run the business agent
+        const state = await boardManager.getProjectState(currentProjectId);
+        const lowerMsg = message.toLowerCase();
+        if (state?.prd && (lowerMsg.includes('revise') || lowerMsg.includes('update prd') || lowerMsg.includes('change prd'))) {
+          const bizAgent = getAgent('business');
+          const bizContext = await boardManager.buildAgentContext(currentProjectId, 'business');
+          const bizResult = await bizAgent.execute(
+            `The user wants to revise the PRD. Their feedback: "${message}". Review the current PRD and make the requested changes.`,
+            bizContext
+          );
+
+          // Process the business agent's response
+          await processAgentResponse(currentProjectId, bizResult);
+
+          // Save to conversation
+          if (bizResult.output.statusUpdate) {
+            await boardManager.saveConversationMessage(currentProjectId, {
+              role: 'system',
+              content: bizResult.output.statusUpdate,
+              agentRole: 'business',
+              metadata: { confidence: bizResult.confidence },
+            });
+          }
+        }
+        break;
+      }
+
       default: {
         // General conversation → CTO responds with full personality
         ctoResult = await ctoAgent.converse(message, conversationHistory, projectContext);
@@ -296,6 +328,12 @@ function detectUserIntent(message: string): string {
   // QA/test related queries
   if (/(test|qa|quality|bug|check|verify|validate|gate)/.test(lower)) {
     return 'qa_query';
+  }
+
+  // PRD/feature/requirements related queries
+  if (/(prd|feature|requirement|scope|mvp|user stor|product|roadmap|priorit)/.test(lower) ||
+      /(revise prd|update prd|change prd|add feature|remove feature|cut feature)/.test(lower)) {
+    return 'prd_query';
   }
 
   // User suggesting something that might need push-back

@@ -361,3 +361,47 @@ Stage Summary:
 - URL testing verifies live deployments with HTTP 200 + content checks
 - Deployment records tracked in database with status, URL, timestamps
 - Ready for Phase 5: Business Agent or Phase 6: Autonomous Loop testing
+
+---
+Task ID: 9
+Agent: Super Z (Main)
+Task: Phase 5 — Enhanced Business Strategist Agent with PRD Validation, Revision, and Robust Extraction
+
+Work Log:
+- Completely rewrote Business Strategist Agent (/src/lib/agents/business-strategist.ts):
+  - Enhanced system prompt with detailed PRD structure, acceptance criteria rules, MVP cutting rules
+  - Added validatePRD(): Quality checks for PRD completeness — checks required fields, user stories, acceptance criteria, vague language
+  - Added revisePRD(): Convenience method for revising existing PRDs based on feedback
+  - Added buildStatusUpdate(): Detailed status update from PRD with feature counts and validation status
+  - Added tryExtractPRDFromRaw(): Fallback extraction when AI doesn't return structured JSON
+  - Validates PRD quality: checks for missing fields, vague language, insufficient acceptance criteria, too many MVP features
+  - Warnings added to analysis when PRD has quality issues
+- Rewrote extractPRDFromResponse() in Orchestrator (/src/lib/engine/orchestrator.ts):
+  - 5-strategy PRD extraction: direct output, text parsing, top-level detection, JSON search, minimal construction
+  - normalizePRD(): Fills in missing fields with intelligent defaults
+  - normalizeFeature() / normalizeUserStory(): Ensures all sub-objects have required fields
+  - tryParsePRDFromText(): Parses PRD from free-form text with JSON block detection
+  - extractProjectName(): Extracts project name from text using patterns
+  - extractTargetUsers(): Extracts target user descriptions from text
+  - extractFeaturesFromText(): Extracts feature names from bullet/numbered lists
+  - findBalancedJSON(): Finds complete JSON objects in strings
+  - Added Feature and UserStory type imports to orchestrator
+- Enhanced Business Agent handling in Orchestrator:
+  - Removed condition requiring output.analysis — now always attempts PRD extraction
+  - Added logging with feature/MVP counts when PRD is saved
+- Enhanced Chat API (/src/app/api/chat/route.ts):
+  - Added prd_query intent detection for PRD/feature/requirements/scope/MVP keywords
+  - prd_query handler: CTO responds conversationally + triggers Business Agent for PRD revisions
+  - When user wants to revise PRD, runs business agent with revision instructions
+  - Processes business agent response (saves PRD to DB) and broadcasts to conversation
+  - Added getAgent import for business agent access
+- TypeScript: PASS (0 errors in AION code)
+- Build: PASS (all routes registered)
+
+Stage Summary:
+- Business Agent is now a REAL product manager — validates PRDs, detects quality issues, enables revisions
+- PRD extraction is extremely robust with 5 strategies — catches AI output in any format
+- Users can now revise PRDs conversationally via chat ("revise PRD", "update features", etc.)
+- PRD quality validation catches: missing fields, vague language, insufficient acceptance criteria, over-scoped MVP
+- Chat route detects PRD-related queries and routes to Business Agent
+- Ready for Phase 6: Autonomous Loop testing or Phase 7: UI Polish
