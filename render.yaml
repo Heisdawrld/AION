@@ -1,0 +1,42 @@
+# AION — Render Deployment Configuration
+# https://render.com/docs/blueprint-spec
+#
+# HOW TO DEPLOY:
+# 1. Go to https://dashboard.render.com
+# 2. Click "New" → "Blueprint"
+# 3. Connect your GitHub repo: Heisdawrld/AION
+# 4. Render will auto-detect this render.yaml
+# 5. Set AION_API_KEY manually in the web service environment
+# 6. Deploy!
+
+services:
+  # PostgreSQL Database (free tier — 90 day limit)
+  - type: pserv
+    name: aion-db
+    runtime: postgresql
+    plan: free
+    # Free tier: 1GB storage, expires after 90 days
+    # Upgrade to "Starter" ($7/mo) for persistent storage
+
+  # Web Application
+  - type: web
+    name: aion
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm run render-build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromService:
+          name: aion-db
+          type: pserv
+          property: connectionString
+      - key: AION_API_KEY
+        sync: false  # Set this manually in Render dashboard!
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/health
