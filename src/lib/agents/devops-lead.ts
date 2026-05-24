@@ -47,7 +47,7 @@ interface DevOpsOutput {
   status: 'success' | 'failed' | 'needs_clarification';
   output: {
     analysis?: string;
-    files?: { path: string; content: string; action: string; description: string }[];
+    files?: { path: string; content: string; action: 'create' | 'update' | 'delete'; description: string }[];
     checklist?: Record<string, boolean>;
     statusUpdate?: string;
     nextSteps?: string[];

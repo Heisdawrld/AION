@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import {
   AGENT_EMOJIS,
   AGENT_NAMES,
@@ -17,12 +17,11 @@ import {
 import {
   Send,
   Zap,
-  Bot,
   Loader2,
   Sparkles,
   ArrowRight,
-  Globe,
-  Github,
+  LayoutDashboard,
+  FastForward,
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
@@ -37,6 +36,7 @@ const AGENT_DESCRIPTIONS: Record<AgentRole, string> = {
 };
 
 export default function AIONHome() {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -160,12 +160,13 @@ export default function AIONHome() {
     setProjectStatus('processing');
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/orchestrate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: 'Continue building',
           projectId,
+          action: 'cycle',
+          steps: 3,
         }),
       });
 
@@ -255,9 +256,19 @@ export default function AIONHome() {
               {projectStatus === 'idle' ? 'Ready' : projectStatus === 'live' ? '🟢 Live' : `⚡ ${projectStatus}`}
             </Badge>
             {projectId && (
-              <Badge variant="outline" className="text-xs font-mono">
-                {projectId.substring(0, 8)}
-              </Badge>
+              <>
+                <Badge variant="outline" className="text-xs font-mono">
+                  {projectId.substring(0, 8)}
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => router.push(`/project/${projectId}`)}
+                >
+                  <LayoutDashboard className="w-3 h-3" /> Dashboard
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -282,7 +293,7 @@ export default function AIONHome() {
                 {/* Agent Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mb-8">
                   {(Object.entries(AGENT_NAMES) as [AgentRole, string][]).map(([role, name]) => (
-                    <Card key={role} className="p-3 text-center">
+                    <Card key={role} className="p-3 text-center hover:border-amber-500/50 transition-colors">
                       <div className="text-2xl mb-1">{AGENT_EMOJIS[role]}</div>
                       <div className="text-xs font-medium">{name}</div>
                       <div className="text-[10px] text-muted-foreground">{AGENT_DESCRIPTIONS[role]}</div>
@@ -301,7 +312,7 @@ export default function AIONHome() {
                     <button
                       key={example}
                       onClick={() => setInput(example)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-border hover:bg-accent transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-full border border-border hover:bg-accent hover:border-amber-500/50 transition-colors"
                     >
                       {example}
                     </button>
@@ -320,7 +331,7 @@ export default function AIONHome() {
                         className="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
                         style={{
                           backgroundColor: msg.agentRole
-                            ? `${AGENT_COLORS[msg.agentRole]}20`
+                            ? `${AGENT_COLORS[msg.agentRole as AgentRole]}20`
                             : '#f59e0b20',
                         }}
                       >
@@ -398,14 +409,25 @@ export default function AIONHome() {
                 <Send className="w-4 h-4" />
               </Button>
               {projectId && !isLoading && (
-                <Button
-                  onClick={handleContinue}
-                  variant="outline"
-                  className="rounded-xl px-4"
-                >
-                  <ArrowRight className="w-4 h-4 mr-1" />
-                  Continue
-                </Button>
+                <>
+                  <Button
+                    onClick={handleContinue}
+                    variant="outline"
+                    className="rounded-xl px-4"
+                    title="Run 3 autonomous steps"
+                  >
+                    <FastForward className="w-4 h-4 mr-1" />
+                    Auto
+                  </Button>
+                  <Button
+                    onClick={() => router.push(`/project/${projectId}`)}
+                    variant="outline"
+                    className="rounded-xl px-4"
+                  >
+                    <LayoutDashboard className="w-4 h-4 mr-1" />
+                    Dashboard
+                  </Button>
+                </>
               )}
             </div>
           </div>

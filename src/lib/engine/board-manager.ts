@@ -1,9 +1,9 @@
-// AION — Board Manager
+// AION — Board Manager (Enhanced)
 // Reads and writes the Project Board (database-backed)
 // This is the SINGLE SOURCE OF TRUTH for all project state
 
 import { db } from '@/lib/db';
-import type { PRD, ExecutionPlan, AgentRole, ProjectBoardState } from '@/lib/types/aion';
+import type { PRD, ExecutionPlan, AgentRole, ProjectBoardState, TaskAssignment } from '@/lib/types/aion';
 
 export class BoardManager {
   /**
@@ -72,6 +72,7 @@ export class BoardManager {
         files: true,
         bugs: { where: { status: 'open' } },
         agentLogs: { orderBy: { createdAt: 'desc' }, take: 10 },
+        testResults: { orderBy: { ranAt: 'desc' }, take: 5 },
       },
     });
 
@@ -89,13 +90,30 @@ export class BoardManager {
     parts.push(`STATUS: ${project.status}`);
     parts.push(`DESCRIPTION: ${project.description}`);
 
-    // Include PRD summary (not full PRD — too long)
+    // Include PRD (full for business/cto, summary for others)
     if (project.prd) {
       try {
         const prd = JSON.parse(project.prd) as PRD;
-        parts.push(`\nPRD SUMMARY: ${prd.summary || 'No summary'}`);
-        parts.push(`MVP FEATURES: ${prd.mvpFeatures?.join(', ') || 'Not defined'}`);
-        parts.push(`TARGET USERS: ${prd.targetUsers || 'Not defined'}`);
+        if (agentRole === 'business' || agentRole === 'cto') {
+          // Full PRD for planning agents
+          parts.push(`\nPRD (FULL):`);
+          parts.push(`  Problem: ${prd.problemStatement}`);
+          parts.push(`  Target Users: ${prd.targetUsers}`);
+          parts.push(`  MVP Features: ${prd.mvpFeatures?.join(', ') || 'Not defined'}`);
+          parts.push(`  Post-MVP: ${prd.postMvpFeatures?.join(', ') || 'None'}`);
+          parts.push(`  Success Criteria: ${prd.successCriteria?.join('; ') || 'Not defined'}`);
+          if (prd.coreFeatures) {
+            parts.push(`  Core Features:`);
+            prd.coreFeatures.forEach(f => {
+              parts.push(`    - ${f.name} (${f.priority}): ${f.description}`);
+            });
+          }
+        } else {
+          // Summary for builder agents
+          parts.push(`\nPRD SUMMARY: ${prd.summary || 'No summary'}`);
+          parts.push(`MVP FEATURES: ${prd.mvpFeatures?.join(', ') || 'Not defined'}`);
+          parts.push(`TARGET USERS: ${prd.targetUsers || 'Not defined'}`);
+        }
       } catch {
         parts.push(`\nPRD: Error parsing PRD`);
       }
@@ -103,19 +121,28 @@ export class BoardManager {
       parts.push(`\nPRD: Not yet created`);
     }
 
+    // Include execution plan for builder agents
+    if (project.executionPlan) {
+      try {
+        const plan = JSON.parse(project.executionPlan) as ExecutionPlan;
+        parts.push(`\nEXECUTION PLAN: ${plan.approach || 'In progress'}`);
+      } catch {}
+    }
+
     // Include relevant completed tasks
     if (completedTasks.length > 0) {
       parts.push(`\nCOMPLETED TASKS (${completedTasks.length}):`);
-      completedTasks.slice(-10).forEach(t => {
-        parts.push(`  - [${t.assignedTo}] ${t.description} ${t.status === 'done' ? '✅' : ''}`);
+      completedTasks.slice(-15).forEach(t => {
+        parts.push(`  - [${t.assignedTo}] ${t.description} ✅`);
       });
     }
 
-    // Include pending tasks
+    // Include pending tasks (most important for current agent)
     if (pendingTasks.length > 0) {
       parts.push(`\nPENDING TASKS (${pendingTasks.length}):`);
       pendingTasks.forEach(t => {
-        parts.push(`  - [${t.assignedTo}] ${t.description}`);
+        const isMyTask = t.assignedTo === agentRole;
+        parts.push(`  - [${t.assignedTo}] ${t.description} ${isMyTask ? '← YOUR TASK' : ''}`);
       });
     }
 
@@ -131,15 +158,31 @@ export class BoardManager {
     if (project.bugs.length > 0) {
       parts.push(`\nOPEN BUGS (${project.bugs.length}):`);
       project.bugs.forEach(b => {
-        parts.push(`  - [${b.severity}] ${b.description} ${b.filePath ? `(${b.filePath})` : ''}`);
+        const isMyBug = b.assignedTo === agentRole;
+        parts.push(`  - [${b.severity}] ${b.description} ${b.filePath ? `(${b.filePath})` : ''} ${isMyBug ? '← FIX THIS' : ''}`);
       });
     }
 
-    // Include file manifest
+    // Include file manifest — crucial for code generation
     if (project.files.length > 0) {
-      parts.push(`\nFILES CREATED (${project.files.length}):`);
+      parts.push(`\nFILES IN PROJECT (${project.files.length}):`);
+      // Show file paths grouped by agent
+      const byAgent: Record<string, string[]> = {};
       project.files.forEach(f => {
-        parts.push(`  - ${f.path} (by ${f.createdBy})`);
+        if (!byAgent[f.createdBy]) byAgent[f.createdBy] = [];
+        byAgent[f.createdBy].push(f.path);
+      });
+      for (const [agent, paths] of Object.entries(byAgent)) {
+        parts.push(`  [${agent}]:`);
+        paths.forEach(p => parts.push(`    - ${p}`));
+      }
+    }
+
+    // Include test results
+    if (project.testResults.length > 0) {
+      parts.push(`\nTEST RESULTS:`);
+      project.testResults.forEach(tr => {
+        parts.push(`  - ${tr.testType}: ${tr.passed ? '✅ PASS' : '❌ FAIL'} ${tr.details ? `— ${tr.details.substring(0, 100)}` : ''}`);
       });
     }
 
@@ -229,7 +272,41 @@ export class BoardManager {
   }
 
   /**
-   * Write files to the project
+   * Get next pending task for an agent
+   */
+  async getNextPendingTask(projectId: string, agentRole?: AgentRole) {
+    const where: any = { projectId, status: 'pending' };
+    if (agentRole) where.assignedTo = agentRole;
+
+    return db.task.findFirst({
+      where,
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  /**
+   * Get all pending tasks for a project
+   */
+  async getPendingTasks(projectId: string) {
+    return db.task.findMany({
+      where: { projectId, status: 'pending' },
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  /**
+   * Get next pending task and mark it as in_progress
+   */
+  async claimNextTask(projectId: string, agentRole: AgentRole) {
+    const task = await this.getNextPendingTask(projectId, agentRole);
+    if (task) {
+      await this.updateTaskStatus(task.id, 'in_progress');
+    }
+    return task;
+  }
+
+  /**
+   * Write files to the project (database)
    */
   async writeFiles(projectId: string, files: { path: string; content: string; createdBy: string }[]): Promise<void> {
     for (const file of files) {
@@ -281,6 +358,16 @@ export class BoardManager {
   }
 
   /**
+   * Resolve a bug
+   */
+  async resolveBug(bugId: string): Promise<void> {
+    await db.bug.update({
+      where: { id: bugId },
+      data: { status: 'resolved', resolvedAt: new Date() },
+    });
+  }
+
+  /**
    * Log agent activity
    */
   async logAgentActivity(projectId: string, log: {
@@ -313,15 +400,40 @@ export class BoardManager {
   }
 
   /**
-   * Get the next pending task for an agent
+   * Create a deployment record
    */
-  async getNextPendingTask(projectId: string, agentRole?: AgentRole) {
-    const where: any = { projectId, status: 'pending' };
-    if (agentRole) where.assignedTo = agentRole;
+  async createDeployment(projectId: string, data: {
+    platform?: string;
+    status?: string;
+    url?: string;
+    githubRepo?: string;
+    errors?: string;
+  }): Promise<string> {
+    const deployment = await db.deployment.create({
+      data: {
+        projectId,
+        platform: data.platform || 'render',
+        status: data.status || 'pending',
+        url: data.url,
+        githubRepo: data.githubRepo,
+        errors: data.errors,
+      },
+    });
+    return deployment.id;
+  }
 
-    return db.task.findFirst({
-      where,
-      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+  /**
+   * Update deployment
+   */
+  async updateDeployment(deploymentId: string, data: {
+    status?: string;
+    url?: string;
+    errors?: string;
+    deployedAt?: Date;
+  }): Promise<void> {
+    await db.deployment.update({
+      where: { id: deploymentId },
+      data,
     });
   }
 
@@ -348,11 +460,31 @@ export class BoardManager {
       include: {
         tasks: { orderBy: { createdAt: 'asc' } },
         files: { orderBy: { path: 'asc' } },
-        bugs: { orderBy: { createdAt: 'desc' } },
-        testResults: { orderBy: { ranAt: 'desc' } },
-        agentLogs: { orderBy: { createdAt: 'desc' }, take: 50 },
-        deployments: { orderBy: { createdAt: 'desc' } },
+        bugs: { orderBy: { id: 'desc' } },
+        testResults: { orderBy: { id: 'desc' } },
+        agentLogs: { orderBy: { id: 'desc' }, take: 50 },
+        deployments: { orderBy: { id: 'desc' } },
       },
+    });
+  }
+
+  /**
+   * Update project live URL
+   */
+  async updateLiveUrl(projectId: string, url: string): Promise<void> {
+    await db.project.update({
+      where: { id: projectId },
+      data: { liveUrl: url },
+    });
+  }
+
+  /**
+   * Update project GitHub repo
+   */
+  async updateGithubRepo(projectId: string, repo: string): Promise<void> {
+    await db.project.update({
+      where: { id: projectId },
+      data: { githubRepo: repo },
     });
   }
 }

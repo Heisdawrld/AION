@@ -36,13 +36,90 @@ export abstract class BaseAgent {
   /**
    * Call AI with the agent's system prompt + task context.
    * Returns parsed JSON response.
+   * If JSON parsing fails, attempts to extract structured data from text.
    */
   protected async callAgentAI<T>(userMessage: string): Promise<{ data: T | null; raw: string; duration: number }> {
-    return callAIForJSON<T>({
+    const result = await callAIForJSON<T>({
       systemPrompt: this.systemPrompt,
       userMessage,
       temperature: 0.3,
+      maxTokens: 8192, // More tokens for code generation
     });
+
+    // If JSON parsing succeeded, return it
+    if (result.data) {
+      return result;
+    }
+
+    // If JSON parsing failed but we have raw content, try to build a response from it
+    if (result.raw && result.raw.length > 10) {
+      console.log(`[AION ${this.role}] JSON parsing failed, attempting text-based extraction...`);
+      const extracted = this.extractResponseFromText(result.raw);
+      if (extracted) {
+        return { data: extracted as T, raw: result.raw, duration: result.duration };
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Attempt to extract a structured response from free-form text.
+   * This is a fallback when the AI doesn't return valid JSON.
+   */
+  private extractResponseFromText(text: string): AgentResponse | null {
+    // Try to find a JSON-like structure in the text
+    const jsonMatch = text.match(/\{[\s\S]*"status"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch {}
+    }
+
+    // If no JSON found, build a response from the text
+    // Check if the text contains file blocks
+    const files: FileChange[] = [];
+    const fileBlockRegex = /(?:File|file):\s*`?([^`\n]+)`?\s*```(?:\w+)?\s*\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fileBlockRegex.exec(text)) !== null) {
+      files.push({
+        path: match[1].trim(),
+        content: match[2].trim(),
+        action: 'create',
+        description: `Generated file: ${match[1].trim()}`,
+      });
+    }
+
+    // Also try ```typescript or ```tsx blocks with filenames in comments
+    const codeBlockRegex = /\/\/\s*(?:File|file|Path|path):\s*([^\n]+)\n```(?:typescript|tsx|ts|javascript|jsx|json|prisma)?\s*\n([\s\S]*?)```/g;
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+      files.push({
+        path: match[1].trim(),
+        content: match[2].trim(),
+        action: 'create',
+        description: `Generated file: ${match[1].trim()}`,
+      });
+    }
+
+    // Build a reasonable response
+    const analysis = text.replace(/```[\s\S]*?```/g, '[code block]').substring(0, 500);
+
+    return {
+      agentId: this.role,
+      taskId: `${this.role}-task`,
+      status: files.length > 0 ? 'success' : 'needs_clarification',
+      output: {
+        analysis,
+        files: files.length > 0 ? files : undefined,
+        statusUpdate: files.length > 0
+          ? `Generated ${files.length} file(s)`
+          : 'I generated a response but could not structure it properly. Retrying might help.',
+        nextSteps: files.length > 0
+          ? ['Run next agent task', 'Install new dependencies if any']
+          : ['Retry with simpler task'],
+      },
+      confidence: files.length > 0 ? 0.7 : 0.4,
+    };
   }
 
   /**

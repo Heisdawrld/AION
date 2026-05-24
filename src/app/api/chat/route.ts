@@ -1,5 +1,6 @@
-// AION — Chat API Route
+// AION — Chat API Route (Enhanced)
 // Main endpoint for user interaction with the AION system
+// Now integrates with workspace manager and real orchestration
 
 import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
@@ -17,7 +18,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // If no project ID, create a new project
+    // If no project ID, create a new project and kick it off
     let currentProjectId = projectId;
     if (!currentProjectId) {
       currentProjectId = await boardManager.createProject(
@@ -38,9 +39,11 @@ export async function POST(request: NextRequest) {
           analysis: r.output.analysis?.substring(0, 500),
           confidence: r.confidence,
           taskAssignments: r.output.taskAssignments,
+          filesCount: r.output.files?.length || 0,
         })),
         projectStatus: result.projectStatus,
         liveUrl: result.liveUrl,
+        phase: result.phase,
       });
     }
 
@@ -57,9 +60,13 @@ export async function POST(request: NextRequest) {
         analysis: r.output.analysis?.substring(0, 500),
         confidence: r.confidence,
         taskAssignments: r.output.taskAssignments,
+        filesCount: r.output.files?.length || 0,
+        bugsCount: r.output.bugs?.length || 0,
       })),
       projectStatus: result.projectStatus,
       liveUrl: result.liveUrl,
+      cycleCount: result.cycleCount,
+      phase: result.phase,
     });
   } catch (error: any) {
     console.error('[AION Chat API] Error:', error);

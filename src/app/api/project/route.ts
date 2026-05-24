@@ -1,5 +1,5 @@
 // AION — Project API Route
-// CRUD operations for projects
+// CRUD operations for projects + detailed project data
 
 import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
@@ -10,18 +10,28 @@ export async function GET(request: NextRequest) {
     const projectId = searchParams.get('id');
 
     if (projectId) {
+      // Get single project with full details
       const project = await boardManager.getProject(projectId);
+
       if (!project) {
-        return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+        return NextResponse.json(
+          { error: 'Project not found' },
+          { status: 404 }
+        );
       }
-      return NextResponse.json({ project });
+
+      return NextResponse.json(project);
     }
 
+    // List all projects
     const projects = await boardManager.listProjects();
-    return NextResponse.json({ projects });
+    return NextResponse.json(projects);
   } catch (error: any) {
     console.error('[AION Project API] Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -31,15 +41,23 @@ export async function POST(request: NextRequest) {
     const { name, description } = body;
 
     if (!name) {
-      return NextResponse.json({ error: 'Name is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Name is required' },
+        { status: 400 }
+      );
     }
 
     const projectId = await boardManager.createProject(name, description || '');
-    const project = await boardManager.getProject(projectId);
 
-    return NextResponse.json({ project }, { status: 201 });
+    return NextResponse.json({
+      projectId,
+      message: 'Project created',
+    });
   } catch (error: any) {
     console.error('[AION Project API] Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
