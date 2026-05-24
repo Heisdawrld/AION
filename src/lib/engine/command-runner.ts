@@ -383,6 +383,7 @@ export class CommandRunner {
 
     try {
       // Check workspace exists
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('fs');
       checklist.projectInitialized = fs.existsSync(`${workspacePath}/package.json`);
       checklist.dependenciesInstalled = fs.existsSync(`${workspacePath}/node_modules`);

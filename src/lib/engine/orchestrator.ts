@@ -1153,9 +1153,37 @@ async function determineNextAction(state: any): Promise<NextAction> {
       };
     }
 
+    // Step 5: Performance Engineer runs optimization audit
+    const hasPerformance = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'performance' },
+    });
+
+    if (!hasPerformance) {
+      console.log(`[AION Orchestrator] Project is LIVE — running performance audit`);
+      return {
+        type: 'run_agent',
+        agent: 'performance',
+        task: 'The project is now LIVE. Run a comprehensive performance audit: analyze the build output for bundle size, review source code for performance anti-patterns, check for unnecessary dependencies, review image handling and lazy loading, and generate optimization recommendations with a performance monitoring setup. Create performance utility code for measuring Core Web Vitals.',
+      };
+    }
+
+    // Step 6: Compliance Officer runs compliance audit
+    const hasCompliance = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'compliance' },
+    });
+
+    if (!hasCompliance) {
+      console.log(`[AION Orchestrator] Project is LIVE — running compliance audit`);
+      return {
+        type: 'run_agent',
+        agent: 'compliance',
+        task: 'The project is now LIVE. Run a comprehensive compliance audit: scan all npm dependencies for license compatibility (flag GPL/AGPL in proprietary projects), review source code for GDPR/CCPA data handling compliance, check for cookie consent requirements, audit accessibility (WCAG 2.1 AA), and generate a privacy policy. Create compliance documentation and a cookie consent component.',
+      };
+    }
+
     return {
       type: 'complete',
-      message: '🎉 Project is LIVE, documented, secured, tracked, and integrated!',
+      message: '🎉 Project is LIVE, documented, secured, tracked, integrated, optimized, and compliant!',
     };
   }
 

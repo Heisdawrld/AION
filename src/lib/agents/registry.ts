@@ -1,6 +1,6 @@
 // AION — Agent Registry
 // Creates and provides access to all agent instances
-// 13 agents — from planning to production, research to security
+// 15 agents — from planning to production, research to compliance
 
 import type { AgentRole } from '@/lib/types/aion';
 import { BaseAgent } from './base-agent';
@@ -17,6 +17,8 @@ import { DataEngineerAgent } from './data-engineer';
 import { DocumentationLeadAgent } from './docs-lead';
 import { AnalyticsEngineerAgent } from './analytics-engineer';
 import { IntegrationSpecialistAgent } from './integration-specialist';
+import { PerformanceEngineerAgent } from './performance-engineer';
+import { ComplianceOfficerAgent } from './compliance-officer';
 
 // Singleton instances
 const agents: Map<AgentRole, BaseAgent> = new Map();
@@ -63,6 +65,12 @@ export function getAgent(role: AgentRole): BaseAgent {
       case 'integration':
         agents.set(role, new IntegrationSpecialistAgent());
         break;
+      case 'performance':
+        agents.set(role, new PerformanceEngineerAgent());
+        break;
+      case 'compliance':
+        agents.set(role, new ComplianceOfficerAgent());
+        break;
       default:
         throw new Error(`Unknown agent role: ${role}`);
     }
@@ -74,7 +82,8 @@ export function getAllAgents(): Map<AgentRole, BaseAgent> {
   // Initialize all agents
   for (const role of [
     'cto', 'business', 'frontend', 'backend', 'qa', 'devops',
-    'research', 'security', 'design', 'data', 'docs', 'analytics', 'integration',
+    'research', 'security', 'design', 'data', 'docs', 'analytics',
+    'integration', 'performance', 'compliance',
   ] as AgentRole[]) {
     getAgent(role);
   }

@@ -48,6 +48,8 @@ const AGENT_DESCRIPTIONS: Record<AgentRole, string> = {
   docs: 'Auto-generates README, API docs, and guides',
   analytics: 'Sets up tracking, dashboards, and A/B testing',
   integration: 'Connects third-party APIs, OAuth, webhooks',
+  performance: 'Profiles performance, optimizes bundle, Core Web Vitals',
+  compliance: 'License auditing, GDPR, privacy policies, WCAG compliance',
 };
 
 export default function AIONHome() {
@@ -402,26 +404,58 @@ export default function AIONHome() {
                 </div>
                 <h2 className="text-2xl font-bold mb-2">Welcome to AION</h2>
                 <p className="text-muted-foreground mb-4 max-w-md">
-                  Describe the app you want to build. Your Lead CTO will talk you through the plan, push back on bad ideas, and coordinate 6 AI agents to build, test, and ship it.
+                  Describe the app you want to build. Your Lead CTO will talk you through the plan, push back on bad ideas, and coordinate 15 AI agents to build, test, and ship it.
                 </p>
                 <p className="text-sm text-amber-500 font-medium mb-6">
                   Your CTO is bold, honest, and goes the extra mile. Not a yes-man.
                 </p>
 
-                {/* Agent Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg mb-8">
-                  {(Object.entries(AGENT_NAMES) as [AgentRole, string][]).map(([role, name]) => (
-                    <Card key={role} className={`p-3 text-center transition-colors ${role === 'cto' ? 'border-amber-500/50 bg-amber-500/5' : 'hover:border-amber-500/50'}`}>
-                      <div className="text-2xl mb-1">{AGENT_EMOJIS[role]}</div>
-                      <div className="text-xs font-medium">{name}</div>
-                      <div className="text-[10px] text-muted-foreground">{AGENT_DESCRIPTIONS[role]}</div>
-                      {role === 'cto' && (
-                        <Badge variant="outline" className="text-[8px] mt-1 text-amber-500 border-amber-500/30">
-                          Your main contact
-                        </Badge>
-                      )}
-                    </Card>
-                  ))}
+                {/* Agent Cards — 3 tiers */}
+                <div className="w-full max-w-2xl mb-8">
+                  {/* Leadership Tier */}
+                  <div className="mb-3">
+                    <p className="text-[10px] uppercase tracking-wider text-amber-500 font-semibold mb-2">Leadership</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['cto', 'business', 'research'] as AgentRole[]).map((role) => (
+                        <Card key={role} className={`p-2.5 text-left transition-colors ${role === 'cto' ? 'border-amber-500/50 bg-amber-500/5' : 'hover:border-amber-500/50'}`}>
+                          <div className="flex items-center gap-2">
+                            <div className="text-lg">{AGENT_EMOJIS[role]}</div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium">{AGENT_NAMES[role]}</div>
+                              <div className="text-[10px] text-muted-foreground truncate">{AGENT_DESCRIPTIONS[role]}</div>
+                            </div>
+                            {role === 'cto' && (
+                              <Badge variant="outline" className="text-[7px] ml-auto shrink-0 text-amber-500 border-amber-500/30">YOUR CTO</Badge>
+                            )}
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Build Tier */}
+                  <div className="mb-3">
+                    <p className="text-[10px] uppercase tracking-wider text-emerald-500 font-semibold mb-2">Build</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['frontend', 'backend', 'design', 'data', 'integration', 'security'] as AgentRole[]).map((role) => (
+                        <Card key={role} className="p-2 text-center hover:border-amber-500/50 transition-colors">
+                          <div className="text-lg">{AGENT_EMOJIS[role]}</div>
+                          <div className="text-[10px] font-medium">{AGENT_NAMES[role]}</div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Quality & Ship Tier */}
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-blue-500 font-semibold mb-2">Quality & Ship</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['qa', 'devops', 'performance', 'compliance', 'docs', 'analytics'] as AgentRole[]).map((role) => (
+                        <Card key={role} className="p-2 text-center hover:border-amber-500/50 transition-colors">
+                          <div className="text-lg">{AGENT_EMOJIS[role]}</div>
+                          <div className="text-[10px] font-medium">{AGENT_NAMES[role]}</div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Example prompts */}

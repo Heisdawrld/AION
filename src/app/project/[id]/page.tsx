@@ -898,7 +898,7 @@ export default function ProjectDashboard() {
           {/* ====== Agents Tab (Enhanced) ====== */}
           <TabsContent value="agents">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-              {(['cto', 'business', 'frontend', 'backend', 'qa', 'devops'] as AgentRole[]).map(role => {
+              {(['cto', 'business', 'research', 'frontend', 'backend', 'design', 'data', 'integration', 'security', 'qa', 'devops', 'performance', 'compliance', 'docs', 'analytics'] as AgentRole[]).map(role => {
                 const agentLogs = project.agentLogs.filter(l => l.agentRole === role);
                 const lastLog = agentLogs[0];
                 const agentTasks = project.tasks.filter(t => t.assignedTo === role);

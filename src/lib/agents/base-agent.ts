@@ -228,6 +228,10 @@ export abstract class BaseAgent {
         return ['src/lib/integrations/', 'src/app/api/auth/', 'src/app/api/webhooks/'];
       case 'security':
         return ['src/middleware.ts', 'src/lib/security/', 'src/app/api/security/'];
+      case 'performance':
+        return ['src/lib/performance/', 'next.config.'];
+      case 'compliance':
+        return ['PRIVACY.md', 'TERMS.md', 'LICENSE', 'src/lib/compliance/', 'src/components/cookie-consent'];
       case 'cto':
       case 'qa':
       case 'devops':

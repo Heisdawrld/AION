@@ -5,9 +5,9 @@
 // AGENT TYPES
 // ============================================================
 
-export type AgentRole = 'cto' | 'frontend' | 'backend' | 'qa' | 'devops' | 'business' | 'research' | 'security' | 'design' | 'data' | 'docs' | 'analytics' | 'integration';
+export type AgentRole = 'cto' | 'frontend' | 'backend' | 'qa' | 'devops' | 'business' | 'research' | 'security' | 'design' | 'data' | 'docs' | 'analytics' | 'integration' | 'performance' | 'compliance';
 
-export const AGENT_ROLES: AgentRole[] = ['cto', 'frontend', 'backend', 'qa', 'devops', 'business', 'research', 'security', 'design', 'data', 'docs', 'analytics', 'integration'];
+export const AGENT_ROLES: AgentRole[] = ['cto', 'frontend', 'backend', 'qa', 'devops', 'business', 'research', 'security', 'design', 'data', 'docs', 'analytics', 'integration', 'performance', 'compliance'];
 
 export const AGENT_NAMES: Record<AgentRole, string> = {
   cto: 'Lead CTO',
@@ -23,6 +23,8 @@ export const AGENT_NAMES: Record<AgentRole, string> = {
   docs: 'Documentation Lead',
   analytics: 'Analytics Engineer',
   integration: 'Integration Specialist',
+  performance: 'Performance Engineer',
+  compliance: 'Compliance Officer',
 };
 
 export const AGENT_EMOJIS: Record<AgentRole, string> = {
@@ -39,6 +41,8 @@ export const AGENT_EMOJIS: Record<AgentRole, string> = {
   docs: '📖',
   analytics: '📊',
   integration: '🔗',
+  performance: '⚡',
+  compliance: '⚖️',
 };
 
 export const AGENT_COLORS: Record<AgentRole, string> = {
@@ -55,6 +59,8 @@ export const AGENT_COLORS: Record<AgentRole, string> = {
   docs: '#6366f1',      // indigo
   analytics: '#84cc16', // lime
   integration: '#a855f7', // purple
+  performance: '#f59e0b', // amber-500
+  compliance: '#0ea5e9',  // sky-500
 };
 
 // Agent write boundaries — what each agent can write to
@@ -72,6 +78,8 @@ export const AGENT_WRITE_ACCESS: Record<AgentRole, string[]> = {
   docs: ['fileManifest:docs', 'apiDocs', 'agentLog'],
   analytics: ['fileManifest:analytics', 'trackingSetup', 'agentLog'],
   integration: ['fileManifest:integration', 'apiIntegrations', 'agentLog'],
+  performance: ['fileManifest:performance', 'performanceMetrics', 'agentLog'],
+  compliance: ['fileManifest:compliance', 'complianceReport', 'agentLog'],
 };
 
 export const AGENT_DENIED_ACCESS: Record<AgentRole, string[]> = {
@@ -88,6 +96,8 @@ export const AGENT_DENIED_ACCESS: Record<AgentRole, string[]> = {
   docs: ['src/app/api/**', 'prisma/**', 'deployStatus'],
   analytics: ['src/app/api/**', 'prisma/**', 'src/components/**', 'deployStatus'],
   integration: ['src/components/**', 'src/app/**/page.tsx', 'testResults'],
+  performance: ['src/components/**', 'src/app/**/page.tsx', 'deployStatus', 'testResults'],
+  compliance: ['src/app/api/**', 'prisma/**', 'testResults', 'deployStatus'],
 };
 
 // ============================================================
