@@ -52,6 +52,10 @@ import {
   GitBranch,
   MonitorCheck,
   ArrowRight,
+  Terminal as TerminalIcon,
+  Send,
+  Trash2,
+  ChevronUp,
 } from 'lucide-react';
 
 // ============================================================
@@ -195,6 +199,13 @@ export default function ProjectDashboard() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamEvents, setStreamEvents] = useState<AutonomousProgressEvent[]>([]);
   const [currentStreamStep, setCurrentStreamStep] = useState<{ step: number; total: number } | null>(null);
+
+  // Terminal state
+  const [terminalInput, setTerminalInput] = useState('');
+  const [terminalHistory, setTerminalHistory] = useState<Array<{ command: string; output: string; stderr: string; exitCode: number; duration: number; timestamp: string; blocked?: boolean }>>([]);
+  const [isTerminalRunning, setIsTerminalRunning] = useState(false);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
   const fetchProject = useCallback(async () => {
     try {
@@ -728,7 +739,7 @@ export default function ProjectDashboard() {
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 pb-8">
         <Tabs defaultValue="tasks" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="tasks" className="gap-1">
               <Activity className="w-3 h-3" /> Tasks
             </TabsTrigger>
@@ -740,6 +751,9 @@ export default function ProjectDashboard() {
             </TabsTrigger>
             <TabsTrigger value="agents" className="gap-1">
               <Zap className="w-3 h-3" /> Agents
+            </TabsTrigger>
+            <TabsTrigger value="terminal" className="gap-1">
+              <TerminalIcon className="w-3 h-3" /> Terminal
             </TabsTrigger>
             <TabsTrigger value="deployments" className="gap-1">
               <Rocket className="w-3 h-3" /> Deploy
@@ -1004,6 +1018,256 @@ export default function ProjectDashboard() {
                   ))}
                 </div>
               </ScrollArea>
+            </div>
+          </TabsContent>
+
+          {/* ====== Terminal Tab ====== */}
+          <TabsContent value="terminal">
+            <div className="mt-4">
+              <Card className="overflow-hidden border-2 border-gray-800 dark:border-gray-600">
+                {/* Terminal Header */}
+                <div className="bg-gray-900 dark:bg-gray-950 px-4 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1.5">
+                      <div className="w-3 h-3 rounded-full bg-red-500" />
+                      <div className="w-3 h-3 rounded-full bg-yellow-500" />
+                      <div className="w-3 h-3 rounded-full bg-green-500" />
+                    </div>
+                    <span className="text-xs text-gray-400 font-mono ml-2">
+                      AION Terminal — workspaces/{projectId.substring(0, 8)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-gray-500 hover:text-gray-300"
+                      onClick={() => { setTerminalHistory([]); setCommandHistory([]); }}
+                      title="Clear terminal"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Terminal Output */}
+                <div className="bg-gray-950 dark:bg-black p-4 min-h-[300px] max-h-[500px] overflow-y-auto font-mono text-sm" id="terminal-output">
+                  {/* Welcome message */}
+                  {terminalHistory.length === 0 && (
+                    <div className="text-gray-500 text-xs space-y-1 mb-4">
+                      <p>AION Terminal v1.0 — Workspace-scoped shell</p>
+                      <p>Type commands below. They run in your project workspace.</p>
+                      <p className="text-gray-600">Quick commands: ls, cat, head, grep, npm, npx, git, node</p>
+                    </div>
+                  )}
+
+                  {/* Command history */}
+                  {terminalHistory.map((entry, i) => (
+                    <div key={i} className="mb-3">
+                      {/* Command line */}
+                      <div className="flex items-start gap-1">
+                        <span className="text-emerald-400 shrink-0">$</span>
+                        <span className="text-gray-200 break-all">{entry.command}</span>
+                      </div>
+                      {/* Stdout */}
+                      {entry.output && (
+                        <pre className="text-gray-300 text-xs whitespace-pre-wrap break-all mt-0.5 ml-4">
+                          {entry.output}
+                        </pre>
+                      )}
+                      {/* Stderr */}
+                      {entry.stderr && (
+                        <pre className={`text-xs whitespace-pre-wrap break-all mt-0.5 ml-4 ${entry.blocked ? 'text-yellow-400' : 'text-red-400'}`}>
+                          {entry.stderr}
+                        </pre>
+                      )}
+                      {/* Exit code indicator */}
+                      <div className="flex items-center gap-2 mt-0.5 ml-4">
+                        {entry.exitCode === 0 ? (
+                          <span className="text-[10px] text-emerald-600">exited with code 0</span>
+                        ) : (
+                          <span className="text-[10px] text-red-600">exited with code {entry.exitCode}</span>
+                        )}
+                        <span className="text-[10px] text-gray-600">{entry.duration}ms</span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Running indicator */}
+                  {isTerminalRunning && (
+                    <div className="flex items-center gap-2 text-amber-400 text-xs">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>Running...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Terminal Input */}
+                <div className="bg-gray-900 dark:bg-gray-950 border-t border-gray-800 px-4 py-2 flex items-center gap-2">
+                  <span className="text-emerald-400 font-mono text-sm shrink-0">$</span>
+                  <input
+                    type="text"
+                    value={terminalInput}
+                    onChange={(e) => setTerminalInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && terminalInput.trim()) {
+                        e.preventDefault();
+                        const cmd = terminalInput.trim();
+                        setTerminalInput('');
+                        setCommandHistory(prev => [...prev, cmd]);
+                        setHistoryIndex(-1);
+
+                        // Execute the command
+                        setIsTerminalRunning(true);
+                        fetch('/api/terminal', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ projectId, command: cmd }),
+                        })
+                          .then(res => res.json())
+                          .then(data => {
+                            setTerminalHistory(prev => [...prev, {
+                              command: cmd,
+                              output: data.stdout || '',
+                              stderr: data.stderr || '',
+                              exitCode: data.exitCode ?? 1,
+                              duration: data.duration ?? 0,
+                              timestamp: new Date().toISOString(),
+                              blocked: data.blocked || false,
+                            }]);
+                            setIsTerminalRunning(false);
+                            // Auto-scroll terminal output
+                            setTimeout(() => {
+                              const el = document.getElementById('terminal-output');
+                              if (el) el.scrollTop = el.scrollHeight;
+                            }, 50);
+                          })
+                          .catch(error => {
+                            setTerminalHistory(prev => [...prev, {
+                              command: cmd,
+                              output: '',
+                              stderr: `Connection error: ${error.message}`,
+                              exitCode: 1,
+                              duration: 0,
+                              timestamp: new Date().toISOString(),
+                            }]);
+                            setIsTerminalRunning(false);
+                          });
+                      }
+                      // Command history navigation
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (commandHistory.length > 0) {
+                          const newIndex = historyIndex === -1 ? commandHistory.length - 1 : Math.max(0, historyIndex - 1);
+                          setHistoryIndex(newIndex);
+                          setTerminalInput(commandHistory[newIndex]);
+                        }
+                      }
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (historyIndex !== -1) {
+                          const newIndex = historyIndex + 1;
+                          if (newIndex >= commandHistory.length) {
+                            setHistoryIndex(-1);
+                            setTerminalInput('');
+                          } else {
+                            setHistoryIndex(newIndex);
+                            setTerminalInput(commandHistory[newIndex]);
+                          }
+                        }
+                      }
+                    }}
+                    placeholder={isTerminalRunning ? 'Running...' : 'Type a command...'}
+                    className="flex-1 bg-transparent text-gray-200 font-mono text-sm focus:outline-none placeholder:text-gray-600"
+                    disabled={isTerminalRunning}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-gray-500 hover:text-emerald-400"
+                    onClick={() => {
+                      if (terminalInput.trim() && !isTerminalRunning) {
+                        const cmd = terminalInput.trim();
+                        setTerminalInput('');
+                        setCommandHistory(prev => [...prev, cmd]);
+                        setHistoryIndex(-1);
+                        setIsTerminalRunning(true);
+                        fetch('/api/terminal', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ projectId, command: cmd }),
+                        })
+                          .then(res => res.json())
+                          .then(data => {
+                            setTerminalHistory(prev => [...prev, {
+                              command: cmd,
+                              output: data.stdout || '',
+                              stderr: data.stderr || '',
+                              exitCode: data.exitCode ?? 1,
+                              duration: data.duration ?? 0,
+                              timestamp: new Date().toISOString(),
+                              blocked: data.blocked || false,
+                            }]);
+                            setIsTerminalRunning(false);
+                            setTimeout(() => {
+                              const el = document.getElementById('terminal-output');
+                              if (el) el.scrollTop = el.scrollHeight;
+                            }, 50);
+                          })
+                          .catch(error => {
+                            setTerminalHistory(prev => [...prev, {
+                              command: cmd,
+                              output: '',
+                              stderr: `Connection error: ${error.message}`,
+                              exitCode: 1,
+                              duration: 0,
+                              timestamp: new Date().toISOString(),
+                            }]);
+                            setIsTerminalRunning(false);
+                          });
+                      }
+                    }}
+                    disabled={isTerminalRunning || !terminalInput.trim()}
+                  >
+                    <Send className="w-3 h-3" />
+                  </Button>
+                </div>
+              </Card>
+
+              {/* Quick Commands */}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="text-xs text-muted-foreground">Quick:</span>
+                {[
+                  'ls -la',
+                  'cat package.json',
+                  'git status',
+                  'git log --oneline -5',
+                  'npm run build',
+                  'npx tsc --noEmit',
+                  'npm run lint',
+                  'cat README.md',
+                  'node -e "console.log(process.version)"',
+                  'du -sh .',
+                ].map(cmd => (
+                  <button
+                    key={cmd}
+                    onClick={() => setTerminalInput(cmd)}
+                    className="text-[11px] px-2 py-1 rounded-md border border-border hover:bg-accent hover:border-amber-500/50 font-mono transition-colors text-muted-foreground hover:text-foreground"
+                  >
+                    {cmd}
+                  </button>
+                ))}
+              </div>
+
+              {/* Terminal Info */}
+              <div className="mt-3 flex items-center gap-4 text-[11px] text-muted-foreground">
+                <span>Commands run in project workspace directory</span>
+                <span>Max timeout: 120s</span>
+                <span>Output truncated at 100KB</span>
+                <span className="text-yellow-600 dark:text-yellow-400">Dangerous commands are blocked</span>
+              </div>
             </div>
           </TabsContent>
 
