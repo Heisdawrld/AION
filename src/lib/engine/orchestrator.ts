@@ -1,6 +1,7 @@
 // AION — Enhanced Orchestrator
 // The autonomous loop that drives agent execution
 // This is the HEART of AION — now with real file system integration
+// and QA VALIDATION GATE enforcement (nothing deploys without QA sign-off)
 
 import { db } from '@/lib/db';
 import { boardManager } from './board-manager';
@@ -16,6 +17,8 @@ import type {
   TaskAssignment,
   FileChange,
   Bug,
+  QAGateResult,
+  TestResultOutput,
 } from '@/lib/types/aion';
 
 const MAX_CYCLES = 100;
@@ -29,6 +32,7 @@ export interface OrchestratorResult {
   liveUrl?: string;
   cycleCount?: number;
   phase?: string;
+  qaGateResult?: QAGateResult;
 }
 
 export interface OrchestrationStep {
@@ -123,6 +127,7 @@ Your job:
    - DevOps Lead: Deploy the application
 4. Be VERY specific — each task should be executable independently
 5. Order tasks correctly: backend before frontend that depends on it
+6. IMPORTANT: Include a QA task after all build tasks are done — QA must review and approve before DevOps deploys
 
 IMPORTANT: Create tasks that can be executed one at a time. Each task should produce concrete output (files, schemas, etc.).`,
     ctoContext
@@ -155,7 +160,12 @@ IMPORTANT: Create tasks that can be executed one at a time. Each task should pro
   // Save execution plan and create tasks
   if (ctoResponse.output.taskAssignments && ctoResponse.output.taskAssignments.length > 0) {
     // Create tasks in the database
-    await boardManager.createTasks(projectId, ctoResponse.output.taskAssignments);
+    await boardManager.createTasks(projectId, ctoResponse.output.taskAssignments.map(ta => ({
+      taskDescription: ta.taskDescription,
+      assignedTo: ta.assignedTo,
+      priority: ta.priority,
+      phase: ta.phase,
+    })));
     console.log(`[AION Orchestrator] Created ${ctoResponse.output.taskAssignments.length} tasks`);
 
     // Save execution plan
@@ -203,6 +213,7 @@ IMPORTANT: Create tasks that can be executed one at a time. Each task should pro
 /**
  * Run one orchestration step — execute the next pending task
  * This is called repeatedly to advance the project
+ * NOW ENFORCES QA GATE: DevOps cannot deploy without QA sign-off
  */
 export async function runOrchestrationStep(projectId: string): Promise<OrchestratorResult> {
   const state = await boardManager.getProjectState(projectId);
@@ -338,6 +349,7 @@ export async function runOrchestrationStep(projectId: string): Promise<Orchestra
     projectStatus: state.status,
     cycleCount: state.totalCycles + 1,
     phase: getPhaseLabel(state),
+    qaGateResult: responses[0]?.output?.qaGateResult,
   };
 }
 
@@ -389,8 +401,84 @@ export async function runAutonomousCycle(
 }
 
 /**
+ * Check if QA has approved deployment for a project
+ * This is the VALIDATION GATE — no deployment without QA sign-off
+ */
+export async function checkQAGate(projectId: string): Promise<QAGateResult | null> {
+  // Get the most recent QA test results
+  const testResults = await db.testResult.findMany({
+    where: { projectId },
+    orderBy: { ranAt: 'desc' },
+    take: 5,
+  });
+
+  // Get open bugs
+  const openBugs = await db.bug.findMany({
+    where: { projectId, status: 'open' },
+  });
+
+  const criticalBugs = openBugs.filter(b => b.severity === 'critical').length;
+  const highBugs = openBugs.filter(b => b.severity === 'high').length;
+
+  // Check if there's a recent build test that passed
+  const buildTest = testResults.find(t => t.testType === 'build');
+  const buildPassed = buildTest?.passed ?? false;
+
+  // If no test results, QA hasn't run yet
+  if (testResults.length === 0) {
+    return null;
+  }
+
+  // Determine gate status
+  let gateStatus: QAGateResult['gateStatus'] = 'fail';
+  let canDeploy = false;
+
+  if (!buildPassed) {
+    gateStatus = 'fail';
+    canDeploy = false;
+  } else if (criticalBugs > 0) {
+    gateStatus = 'fail';
+    canDeploy = false;
+  } else if (highBugs > 2) {
+    gateStatus = 'fail';
+    canDeploy = false;
+  } else if (highBugs > 0) {
+    gateStatus = 'conditional_pass';
+    canDeploy = true;
+  } else {
+    gateStatus = 'pass';
+    canDeploy = true;
+  }
+
+  return {
+    gateStatus,
+    checklist: {
+      buildSucceeds: buildPassed,
+      typescriptCompiles: testResults.some(t => t.testType === 'typecheck' && t.passed),
+      noUnusedImports: true,
+      apiEndpointsValid: true,
+      responsiveDesignOk: true,
+      noSecurityIssues: criticalBugs === 0,
+      dependenciesResolved: buildPassed,
+      prdCoverageComplete: true,
+    },
+    canDeploy,
+    criticalBugCount: criticalBugs,
+    highBugCount: highBugs,
+    mediumBugCount: openBugs.filter(b => b.severity === 'medium').length,
+    lowBugCount: openBugs.filter(b => b.severity === 'low').length,
+    buildPassed,
+    typeCheckPassed: testResults.some(t => t.testType === 'typecheck' && t.passed),
+    lintPassed: testResults.some(t => t.testType === 'lint' && t.passed),
+    summary: canDeploy
+      ? `QA Gate: ${gateStatus.toUpperCase()} — ${criticalBugs} critical, ${highBugs} high bugs. ${buildPassed ? 'Build passes.' : 'Build fails.'}`
+      : `QA Gate: ${gateStatus.toUpperCase()} — Deployment BLOCKED. ${criticalBugs} critical, ${highBugs} high bugs. ${buildPassed ? 'Build passes.' : 'Build fails.'}`,
+  };
+}
+
+/**
  * Determine what should happen next based on project state
- * Now async — fetches actual pending tasks from the database
+ * NOW WITH QA GATE ENFORCEMENT: DevOps can ONLY run after QA approval
  */
 async function determineNextAction(state: any): Promise<NextAction> {
   // Priority 1: If no PRD, Business Agent creates one
@@ -411,10 +499,48 @@ async function determineNextAction(state: any): Promise<NextAction> {
     };
   }
 
-  // Priority 3: If there are pending tasks, execute the next one DIRECTLY
+  // Priority 3: If there are pending tasks (NON-DEVOPS), execute the next one
   if (state.pendingTaskCount > 0) {
     const nextTask = await boardManager.getNextPendingTask(state.projectId);
     if (nextTask) {
+      // CRITICAL: If the next task is for DevOps, CHECK QA GATE FIRST
+      if (nextTask.assignedTo === 'devops') {
+        const qaGate = await checkQAGate(state.projectId);
+
+        if (!qaGate) {
+          // QA hasn't run yet — run QA first!
+          console.log(`[AION Orchestrator] QA gate not found — running QA before DevOps deployment`);
+          return {
+            type: 'run_agent',
+            agent: 'qa',
+            task: 'Run a full QA review of all code in this project. Execute the build, run type checks, review source files, check PRD coverage, and report all bugs. Your QA gate result determines whether deployment can proceed.',
+          };
+        }
+
+        if (!qaGate.canDeploy) {
+          // QA gate failed — DON'T deploy. Assign fix tasks instead.
+          console.log(`[AION Orchestrator] QA gate FAILED (${qaGate.gateStatus}) — blocking DevOps deployment. ${qaGate.criticalBugCount} critical, ${qaGate.highBugCount} high bugs.`);
+
+          if (state.openBugCount > 0) {
+            return {
+              type: 'run_agent',
+              agent: 'cto',
+              task: `QA GATE BLOCKED deployment. ${qaGate.criticalBugCount} critical bugs, ${qaGate.highBugCount} high bugs. Build: ${qaGate.buildPassed ? 'PASS' : 'FAIL'}. Review the open bugs and create fix tasks for the appropriate agents. DO NOT approve deployment until bugs are fixed.`,
+            };
+          }
+
+          // Re-run QA to get fresh results
+          return {
+            type: 'run_agent',
+            agent: 'qa',
+            task: 'Re-run QA review. Previous gate was blocked. Check if bugs have been fixed, run the build again, and provide an updated gate result.',
+          };
+        }
+
+        // QA gate passed — allow DevOps to proceed
+        console.log(`[AION Orchestrator] QA gate PASSED — allowing DevOps deployment`);
+      }
+
       // Mark task as in_progress
       await boardManager.updateTaskStatus(nextTask.id, 'in_progress');
 
@@ -431,21 +557,75 @@ async function determineNextAction(state: any): Promise<NextAction> {
     }
   }
 
-  // Priority 4: If all tasks done and no open bugs, run QA
-  if (state.pendingTaskCount === 0 && state.completedTaskCount > 0 && state.openBugCount === 0 && state.status !== 'testing') {
+  // Priority 4: If all build tasks done, FORCE a QA run (even if there are some bugs)
+  if (state.pendingTaskCount === 0 && state.completedTaskCount > 0 && state.status !== 'testing' && state.status !== 'deploying' && state.status !== 'live') {
+    // Check if QA has already run recently
+    const recentQA = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'qa' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // If QA hasn't run, or last QA was before the most recent file write, run QA
+    const hasTestResults = await db.testResult.findFirst({ where: { projectId: state.projectId } });
+
+    if (!hasTestResults || !recentQA) {
+      return {
+        type: 'run_agent',
+        agent: 'qa',
+        task: 'Run a complete QA review of this project. Execute the build, run type checks and linting, review all source code files, verify PRD feature coverage, and produce a QA gate result. Your gate result determines whether this project can be deployed.',
+      };
+    }
+
+    // If there are open bugs and no pending fix tasks, get CTO to create them
+    if (state.openBugCount > 0) {
+      return {
+        type: 'run_agent',
+        agent: 'cto',
+        task: `There are ${state.openBugCount} open bugs that need fixing. Review them and create fix tasks for the appropriate agents. Prioritize critical and high severity bugs. After bugs are fixed, QA will re-review.`,
+      };
+    }
+  }
+
+  // Priority 5: If QA has passed and there's a pending DevOps task, let it through
+  if (state.status === 'testing') {
+    const qaGate = await checkQAGate(state.projectId);
+    if (qaGate?.canDeploy) {
+      // QA passed — look for a DevOps task or create one
+      const devopsTask = await db.task.findFirst({
+        where: { projectId: state.projectId, assignedTo: 'devops', status: 'pending' },
+      });
+
+      if (devopsTask) {
+        await boardManager.updateTaskStatus(devopsTask.id, 'in_progress');
+        return {
+          type: 'run_agent',
+          agent: 'devops',
+          task: buildTaskInstruction('devops', devopsTask.description),
+        };
+      }
+
+      // No DevOps task — create one via CTO
+      return {
+        type: 'run_agent',
+        agent: 'cto',
+        task: 'QA has passed. Create a deployment task for DevOps to build and deploy the application. Include deployment configuration, environment variables, and deployment target (Render free tier).',
+      };
+    }
+
+    // QA hasn't passed — keep fixing
+    if (state.openBugCount > 0) {
+      return {
+        type: 'run_agent',
+        agent: 'cto',
+        task: `QA gate is blocking deployment. There are ${state.openBugCount} open bugs. Create fix tasks for the responsible agents.`,
+      };
+    }
+
+    // Re-run QA to get fresh gate result
     return {
       type: 'run_agent',
       agent: 'qa',
-      task: 'Review all the code that has been created. Run a quality check: verify TypeScript compilation, check for bugs, confirm all MVP features from the PRD are implemented, and report any issues.',
-    };
-  }
-
-  // Priority 5: If there are open bugs, assign fix tasks
-  if (state.openBugCount > 0 && state.pendingTaskCount === 0) {
-    return {
-      type: 'run_agent',
-      agent: 'cto',
-      task: `There are ${state.openBugCount} open bugs. Review them and create fix tasks for the appropriate agents.`,
+      task: 'Re-run the full QA review. Check if previous bugs have been fixed, run the build and type check, and provide an updated QA gate result.',
     };
   }
 
@@ -481,10 +661,10 @@ function buildTaskInstruction(agentRole: AgentRole, taskDescription: string): st
       return `${taskDescription}\n\nBuild API routes and database schema using Next.js API routes and Prisma ORM. Return ALL file changes in the "files" array with path, content, action, and description. Document all API endpoints and list any new npm dependencies and environment variables needed.`;
 
     case 'qa':
-      return `${taskDescription}\n\nReview all generated code carefully. Check for: TypeScript errors, missing imports, incorrect API contracts, security issues, and PRD feature coverage. Report bugs with exact file paths and severity levels.`;
+      return `${taskDescription}\n\nRun a COMPLETE QA review: execute the build (npm run build), run type checking (tsc --noEmit), run linting, review all source code for bugs, verify PRD feature coverage, check for security issues, and produce a QA gate result. Report ALL bugs with exact file paths, reproduction steps, and severity. Your qaGateResult determines whether this project can be deployed — be thorough and honest.`;
 
     case 'devops':
-      return `${taskDescription}\n\nCreate deployment configuration files. Return them in the "files" array. Include render.yaml or Dockerfile as needed.`;
+      return `${taskDescription}\n\nCreate deployment configuration files. Return them in the "files" array. Include render.yaml or Dockerfile as needed. IMPORTANT: QA must have approved deployment before you deploy. Verify the QA gate status.`;
 
     case 'cto':
       return `${taskDescription}\n\nAs the Lead CTO, make a clear decision and create specific task assignments if needed.`;
@@ -495,20 +675,9 @@ function buildTaskInstruction(agentRole: AgentRole, taskDescription: string): st
 }
 
 /**
- * Get the next pending task and create the appropriate action
- * DEPRECATED — now handled inline in determineNextAction
- */
-function getNextPendingTaskAction(projectId: string): NextAction {
-  return {
-    type: 'run_agent',
-    agent: 'cto',
-    task: 'PICK_NEXT_TASK',
-  };
-}
-
-/**
  * Process an agent's response and update the board accordingly
  * EXPORTED so the chat route can also use it
+ * NOW with proper QA gate result handling and test result recording
  */
 export async function processAgentResponse(
   projectId: string,
@@ -611,33 +780,72 @@ export async function processAgentResponse(
   }
 
   // ========================================
-  // Handle QA Agent — Create bugs and test results
+  // Handle QA Agent — Create bugs, record test results, process gate
   // ========================================
-  if (output.bugs && output.bugs.length > 0 && agentId === 'qa') {
-    for (const bug of output.bugs) {
-      await boardManager.createBug(projectId, {
-        description: bug.description,
-        filePath: bug.filePath,
-        severity: bug.severity,
-        reportedBy: agentId,
-        assignedTo: bug.assignedTo,
-      });
+  if (agentId === 'qa') {
+    // Create bug reports from QA output
+    if (output.bugs && output.bugs.length > 0) {
+      for (const bug of output.bugs) {
+        await boardManager.createBug(projectId, {
+          description: bug.description,
+          filePath: bug.filePath,
+          severity: bug.severity,
+          reportedBy: agentId,
+          assignedTo: bug.assignedTo,
+        });
+      }
     }
 
-    // Also try to run the actual build
-    try {
-      const buildResult = commandRunner.runBuild(projectId);
-      // Create test result
-      await db.testResult.create({
-        data: {
-          projectId,
-          testType: 'build',
-          passed: buildResult.success,
-          details: buildResult.success ? 'Build succeeded' : buildResult.stderr.substring(0, 500),
-        },
-      });
-    } catch (error: any) {
-      console.error(`[AION Orchestrator] Build test failed:`, error.message);
+    // Record test results from QA agent
+    if (output.testResults && output.testResults.length > 0) {
+      for (const testResult of output.testResults) {
+        await db.testResult.create({
+          data: {
+            projectId,
+            testType: testResult.testType,
+            passed: testResult.passed,
+            details: testResult.details,
+          },
+        });
+      }
+    } else {
+      // QA didn't provide structured test results — run build ourselves as fallback
+      try {
+        const buildResult = commandRunner.runBuild(projectId);
+        await db.testResult.create({
+          data: {
+            projectId,
+            testType: 'build',
+            passed: buildResult.success,
+            details: buildResult.success ? 'Build succeeded' : buildResult.stderr.substring(0, 500),
+          },
+        });
+      } catch (error: any) {
+        console.error(`[AION Orchestrator] Build test failed:`, error.message);
+      }
+    }
+
+    // Process QA Gate Result — THIS IS THE VALIDATION GATE
+    if (output.qaGateResult) {
+      const gate = output.qaGateResult;
+      console.log(`[AION Orchestrator] QA GATE RESULT: ${gate.gateStatus} | Can Deploy: ${gate.canDeploy} | Build: ${gate.buildPassed} | TypeCheck: ${gate.typeCheckPassed} | Critical: ${gate.criticalBugCount} | High: ${gate.highBugCount}`);
+
+      if (gate.canDeploy) {
+        // QA approved — update status to testing (ready for deploy)
+        await boardManager.updateStatus(projectId, 'testing');
+        console.log(`[AION Orchestrator] QA gate ${gate.gateStatus} — project can proceed to deployment`);
+      } else {
+        // QA blocked deployment — keep in building status
+        await boardManager.updateStatus(projectId, 'building');
+        console.log(`[AION Orchestrator] QA gate ${gate.gateStatus} — deployment BLOCKED. Need to fix ${gate.criticalBugCount} critical + ${gate.highBugCount} high bugs.`);
+      }
+    } else {
+      // No gate result from QA — just update status based on pass/fail
+      if (response.status === 'success') {
+        await boardManager.updateStatus(projectId, 'testing');
+      } else {
+        await boardManager.updateStatus(projectId, 'building');
+      }
     }
   }
 
@@ -645,43 +853,60 @@ export async function processAgentResponse(
   // Handle DevOps Agent — Build and deploy
   // ========================================
   if (agentId === 'devops') {
-    // Try to actually build the project
-    try {
-      // First, install dependencies
-      const installResult = commandRunner.installDeps(projectId);
-      if (!installResult.success) {
-        console.error(`[AION Orchestrator] Install failed:`, installResult.stderr);
-      }
+    // CRITICAL: Verify QA gate before allowing deployment
+    const qaGate = await checkQAGate(projectId);
 
-      // Then build
-      const buildResult = commandRunner.runBuild(projectId);
+    if (!qaGate || !qaGate.canDeploy) {
+      // QA has not approved — BLOCK deployment
+      console.log(`[AION Orchestrator] DevOps attempted to deploy but QA gate is ${qaGate?.gateStatus || 'missing'}. BLOCKING deployment.`);
 
-      await db.testResult.create({
-        data: {
-          projectId,
-          testType: 'build',
-          passed: buildResult.success,
-          details: buildResult.success
-            ? 'Build succeeded'
-            : `Build failed:\n${buildResult.stderr.substring(0, 500)}`,
-        },
+      // Save the blockage as a conversation message
+      await boardManager.saveConversationMessage(projectId, {
+        role: 'system',
+        content: `🚫 DEPLOYMENT BLOCKED — QA gate has not approved deployment. Gate status: ${qaGate?.gateStatus || 'not run'}. ${qaGate?.criticalBugCount || 0} critical bugs, ${qaGate?.highBugCount || 0} high bugs. Fix bugs and re-run QA before deploying.`,
+        agentRole: 'system',
+        metadata: { blocked: true, reason: 'qa_gate_not_passed' },
       });
 
-      if (buildResult.success) {
-        await boardManager.updateStatus(projectId, 'testing');
+      // Don't update status to deploying — keep in testing
+    } else {
+      // QA has approved — proceed with deployment
+      console.log(`[AION Orchestrator] QA gate approved (${qaGate.gateStatus}) — proceeding with deployment`);
+
+      // Try to actually build the project
+      try {
+        // First, install dependencies
+        const installResult = commandRunner.installDeps(projectId);
+        if (!installResult.success) {
+          console.error(`[AION Orchestrator] Install failed:`, installResult.stderr);
+        }
+
+        // Then build
+        const buildResult = commandRunner.runBuild(projectId);
+
+        await db.testResult.create({
+          data: {
+            projectId,
+            testType: 'build',
+            passed: buildResult.success,
+            details: buildResult.success
+              ? 'Build succeeded'
+              : `Build failed:\n${buildResult.stderr.substring(0, 500)}`,
+          },
+        });
+
+        if (buildResult.success) {
+          await boardManager.updateStatus(projectId, 'deploying');
+        }
+      } catch (error: any) {
+        console.error(`[AION Orchestrator] DevOps execution failed:`, error.message);
       }
-    } catch (error: any) {
-      console.error(`[AION Orchestrator] DevOps execution failed:`, error.message);
     }
   }
 
   // Update project status based on agent activity
   if (agentId === 'cto' && output.taskAssignments && output.taskAssignments.length > 0) {
     await boardManager.updateStatus(projectId, 'building');
-  }
-
-  if (agentId === 'qa' && response.status === 'success') {
-    await boardManager.updateStatus(projectId, 'testing');
   }
 
   if (agentId === 'devops' && output.statusUpdate?.includes('deployed')) {

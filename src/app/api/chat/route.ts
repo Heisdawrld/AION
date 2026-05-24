@@ -79,10 +79,13 @@ export async function POST(request: NextRequest) {
           confidence: r.confidence,
           taskAssignments: r.output.taskAssignments,
           filesCount: r.output.files?.length || 0,
+          bugsCount: r.output.bugs?.length || 0,
+          qaGateResult: r.output.qaGateResult,
         })),
         projectStatus: result.projectStatus,
         liveUrl: result.liveUrl,
         phase: result.phase,
+        qaGateResult: result.qaGateResult,
       });
     }
 
@@ -108,7 +111,7 @@ export async function POST(request: NextRequest) {
     const intent = detectUserIntent(message);
 
     let ctoResult;
-    let orchestrationResult = null;
+    let orchestrationResult: Awaited<ReturnType<typeof runOrchestrationStep>> | null = null;
 
     switch (intent) {
       case 'status_check': {
@@ -155,6 +158,15 @@ export async function POST(request: NextRequest) {
       case 'push_back_test': {
         // User is suggesting something potentially problematic → CTO evaluates honestly
         ctoResult = await ctoAgent.converse(message, conversationHistory, projectContext);
+        break;
+      }
+
+      case 'qa_query': {
+        // User is asking about QA/testing → CTO gives QA status, maybe run QA
+        ctoResult = await ctoAgent.converse(message, conversationHistory, projectContext);
+
+        // Also run an orchestration step (might trigger QA if needed)
+        orchestrationResult = await runOrchestrationStep(currentProjectId);
         break;
       }
 
@@ -233,12 +245,15 @@ export async function POST(request: NextRequest) {
         taskAssignments: r.output.taskAssignments,
         filesCount: r.output.files?.length || 0,
         bugsCount: r.output.bugs?.length || 0,
+        testResultsCount: r.output.testResults?.length || 0,
+        qaGateResult: r.output.qaGateResult,
         actionType: r.agentId === 'cto' ? intent : undefined,
       })),
       projectStatus: updatedState?.status || 'building',
       liveUrl: updatedState?.liveUrl || undefined,
       cycleCount: updatedState?.totalCycles,
       phase: updatedState?.status,
+      qaGateResult: orchestrationResult?.qaGateResult,
     });
   } catch (error: any) {
     console.error('[AION Chat API] Error:', error);
@@ -278,8 +293,13 @@ function detectUserIntent(message: string): string {
     return 'question';
   }
 
+  // QA/test related queries
+  if (/(test|qa|quality|bug|check|verify|validate|gate)/.test(lower)) {
+    return 'qa_query';
+  }
+
   // User suggesting something that might need push-back
-  if (/(just skip|don't need|simple|quick|hack|workaround|shortcut|bypass)/.test(lower)) {
+  if (/(just skip|don't need|simple|quick|hack|workaround|shortcut|bypass|skip test|skip qa|no qa)/.test(lower)) {
     return 'push_back_test';
   }
 

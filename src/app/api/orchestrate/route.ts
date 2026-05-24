@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
-import { runOrchestrationStep, runAutonomousCycle } from '@/lib/engine/orchestrator';
+import { runOrchestrationStep, runAutonomousCycle, checkQAGate } from '@/lib/engine/orchestrator';
 import { workspaceManager } from '@/lib/engine/workspace-manager';
 import { commandRunner } from '@/lib/engine/command-runner';
 import { db } from '@/lib/db';
@@ -38,11 +38,13 @@ export async function POST(request: NextRequest) {
             taskAssignments: r.output.taskAssignments,
             filesCount: r.output.files?.length || 0,
             bugsCount: r.output.bugs?.length || 0,
+            qaGateResult: r.output.qaGateResult,
           })),
           projectStatus: result.projectStatus,
           liveUrl: result.liveUrl,
           cycleCount: result.cycleCount,
           phase: result.phase,
+          qaGateResult: result.qaGateResult,
         });
       }
 
@@ -122,15 +124,44 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // Include QA gate status
+        const qaGate = await checkQAGate(projectId);
+
         return NextResponse.json({
           project: state,
           workspace: workspaceInfo,
+          qaGate,
+        });
+      }
+
+      case 'qa-gate': {
+        // Check QA gate status specifically
+        const qaGate = await checkQAGate(projectId);
+
+        if (!qaGate) {
+          return NextResponse.json({
+            gateStatus: 'not_run',
+            canDeploy: false,
+            message: 'QA has not been run yet. Run QA first before deployment.',
+          });
+        }
+
+        return NextResponse.json({
+          gateStatus: qaGate.gateStatus,
+          canDeploy: qaGate.canDeploy,
+          buildPassed: qaGate.buildPassed,
+          typeCheckPassed: qaGate.typeCheckPassed,
+          criticalBugCount: qaGate.criticalBugCount,
+          highBugCount: qaGate.highBugCount,
+          mediumBugCount: qaGate.mediumBugCount,
+          lowBugCount: qaGate.lowBugCount,
+          summary: qaGate.summary,
         });
       }
 
       default:
         return NextResponse.json(
-          { error: 'Invalid action. Use: step, cycle, build, or status' },
+          { error: 'Invalid action. Use: step, cycle, build, status, or qa-gate' },
           { status: 400 }
         );
     }

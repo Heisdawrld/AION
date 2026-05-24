@@ -118,6 +118,7 @@ export interface AgentResponse {
     statusUpdate?: string; // Message to user
     taskAssignments?: TaskAssignment[];
     nextSteps?: string[];
+    qaGateResult?: QAGateResult;
   };
   confidence: number; // 0-1
   dependencies?: string[];
@@ -278,6 +279,53 @@ export interface ConversationMessage {
     actionType?: string;
   };
   createdAt: string;
+}
+
+// ============================================================
+// QA GATE TYPES (Validation Gate — Layer 4 Anti-Hallucination)
+// ============================================================
+
+export type QAGateStatus = 'pass' | 'fail' | 'conditional_pass' | 'blocked';
+
+export interface QAChecklist {
+  buildSucceeds: boolean;
+  typescriptCompiles: boolean;
+  noUnusedImports: boolean;
+  apiEndpointsValid: boolean;
+  responsiveDesignOk: boolean;
+  noSecurityIssues: boolean;
+  dependenciesResolved: boolean;
+  prdCoverageComplete: boolean;
+}
+
+export interface QAGateResult {
+  gateStatus: QAGateStatus;
+  checklist: QAChecklist;
+  canDeploy: boolean; // true only if gateStatus is 'pass' or 'conditional_pass'
+  criticalBugCount: number;
+  highBugCount: number;
+  mediumBugCount: number;
+  lowBugCount: number;
+  buildPassed: boolean;
+  typeCheckPassed: boolean;
+  lintPassed: boolean;
+  buildErrors?: string[];
+  typeErrors?: string[];
+  lintErrors?: string[];
+  summary: string;
+}
+
+export interface BuildTestResult {
+  buildSuccess: boolean;
+  buildOutput?: string;
+  buildErrors?: string[];
+  buildDuration?: number;
+  typeCheckSuccess: boolean;
+  typeCheckErrors?: string[];
+  lintSuccess: boolean;
+  lintWarnings?: string[];
+  lintErrors?: string[];
+  timestamp: string;
 }
 
 export interface ChatResponse {
