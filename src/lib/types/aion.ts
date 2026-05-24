@@ -258,3 +258,45 @@ export interface AgentActivity {
   confidence?: number;
   status: 'working' | 'success' | 'failed' | 'waiting';
 }
+
+// ============================================================
+// CONVERSATION TYPES
+// ============================================================
+
+export type ConversationRole = 'user' | 'cto' | 'system';
+
+export interface ConversationMessage {
+  id: string;
+  projectId: string;
+  role: ConversationRole;
+  content: string;
+  agentRole?: AgentRole;
+  metadata?: {
+    taskAssignments?: TaskAssignment[];
+    confidence?: number;
+    status?: ProjectStatus;
+    actionType?: string;
+  };
+  createdAt: string;
+}
+
+export interface ChatResponse {
+  projectId: string;
+  message: string;
+  agentResponses: {
+    agentId: string;
+    status: string;
+    statusUpdate?: string;
+    analysis?: string;
+    confidence: number;
+    taskAssignments?: TaskAssignment[];
+    filesCount: number;
+    bugsCount?: number;
+    actionType?: string;
+  }[];
+  projectStatus: string;
+  liveUrl?: string;
+  phase?: string;
+  cycleCount?: number;
+  conversationId?: string;
+}

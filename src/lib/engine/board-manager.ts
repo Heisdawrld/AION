@@ -487,6 +487,70 @@ export class BoardManager {
       data: { githubRepo: repo },
     });
   }
+
+  // ============================================================
+  // CONVERSATION MANAGEMENT
+  // ============================================================
+
+  /**
+   * Save a conversation message to the database
+   */
+  async saveConversationMessage(projectId: string, message: {
+    role: string;
+    content: string;
+    agentRole?: string;
+    metadata?: any;
+  }): Promise<string> {
+    const record = await db.conversationMessage.create({
+      data: {
+        projectId,
+        role: message.role,
+        content: message.content,
+        agentRole: message.agentRole,
+        metadata: message.metadata ? JSON.stringify(message.metadata) : undefined,
+      },
+    });
+    return record.id;
+  }
+
+  /**
+   * Get conversation history for a project
+   * Returns the last N messages for context building
+   */
+  async getConversationHistory(projectId: string, limit: number = 50): Promise<{
+    id: string;
+    role: string;
+    content: string;
+    agentRole: string | null;
+    metadata: string | null;
+    createdAt: Date;
+  }[]> {
+    return db.conversationMessage.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Build a conversation history string for the CTO agent
+   * This is used to give the CTO context of what was discussed
+   */
+  async buildConversationContext(projectId: string, limit: number = 20): Promise<string> {
+    const messages = await this.getConversationHistory(projectId, limit);
+
+    if (messages.length === 0) {
+      return 'No previous conversation.';
+    }
+
+    return messages.map(msg => {
+      const role = msg.role === 'user' ? 'USER' : msg.role === 'cto' ? 'CTO (You)' : 'SYSTEM';
+      const prefix = msg.agentRole && msg.role !== 'user' && msg.role !== 'cto'
+        ? `[${msg.agentRole.toUpperCase()}]`
+        : '';
+      return `${role}${prefix ? ' ' + prefix : ''}: ${msg.content}`;
+    }).join('\n\n');
+  }
 }
 
 // Singleton

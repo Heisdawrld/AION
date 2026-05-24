@@ -123,6 +123,34 @@ export abstract class BaseAgent {
   }
 
   /**
+   * Call AI with a CUSTOM system prompt (instead of the agent's default).
+   * Used for specialized modes like CTO's conversational mode.
+   */
+  protected async callAgentAIWithPrompt<T>(customSystemPrompt: string, userMessage: string): Promise<{ data: T | null; raw: string; duration: number }> {
+    const result = await callAIForJSON<T>({
+      systemPrompt: customSystemPrompt,
+      userMessage,
+      temperature: 0.4, // Slightly higher for conversational personality
+      maxTokens: 8192,
+    });
+
+    if (result.data) {
+      return result;
+    }
+
+    // If JSON parsing failed but we have raw content, try to extract
+    if (result.raw && result.raw.length > 10) {
+      console.log(`[AION ${this.role}] JSON parsing failed with custom prompt, attempting text-based extraction...`);
+      const extracted = this.extractResponseFromText(result.raw);
+      if (extracted) {
+        return { data: extracted as T, raw: result.raw, duration: result.duration };
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Call AI for a text response (no JSON parsing).
    */
   protected async callAgentAIText(userMessage: string): Promise<string> {

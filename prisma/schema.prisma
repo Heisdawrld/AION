@@ -23,12 +23,13 @@ model Project {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tasks       Task[]
-  files       ProjectFile[]
-  bugs        Bug[]
-  testResults TestResult[]
-  agentLogs   AgentLog[]
-  deployments Deployment[]
+  tasks        Task[]
+  files        ProjectFile[]
+  bugs         Bug[]
+  testResults  TestResult[]
+  agentLogs    AgentLog[]
+  deployments  Deployment[]
+  conversations ConversationMessage[]
 }
 
 model Task {
@@ -113,6 +114,18 @@ model Deployment {
   githubRepo String?
   errors     String?   // Error details if failed
   deployedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model ConversationMessage {
+  id          String   @id @default(cuid())
+  projectId   String
+  role        String   // user | cto | system
+  content     String
+  agentRole   String?  // Which agent this message is from (for agent activity broadcasts)
+  metadata    String?  // JSON string for extra data (confidence, taskAssignments, etc.)
+  createdAt   DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
