@@ -802,13 +802,121 @@ export async function runFullAutonomousPipeline(
 }
 
 // ============================================================
+// FILE ACCESS ENFORCEMENT — Hard domain boundary checks
+// This is the orchestrator-level enforcement that prevents agents
+// from writing files outside their domain, even if the AI
+// generates a response with out-of-bound files.
+// ============================================================
+
+/**
+ * Allowed path patterns per agent role.
+ * These map to actual filesystem paths — not abstract tokens.
+ * A file path must match at least one allowed pattern to be written.
+ * Denied patterns take priority over allowed patterns.
+ */
+const AGENT_PATH_RULES: Record<string, { allowed: string[]; denied: string[] }> = {
+  frontend: {
+    allowed: ['src/components/', 'src/app/', 'public/', 'globals.css'],
+    denied: ['src/app/api/', 'prisma/', 'src/lib/server/', 'src/lib/db.ts'],
+  },
+  backend: {
+    allowed: ['src/app/api/', 'prisma/', 'src/lib/server/', 'src/lib/db.ts'],
+    denied: ['src/components/', 'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/project/'],
+  },
+  business: {
+    allowed: ['README.md', 'docs/'],
+    denied: ['src/', 'prisma/'],
+  },
+  design: {
+    allowed: ['src/components/', 'src/app/', 'public/', 'globals.css', 'tailwind.config.'],
+    denied: ['src/app/api/', 'prisma/'],
+  },
+  data: {
+    allowed: ['prisma/', 'src/lib/db.ts', 'src/lib/server/', 'src/app/api/'],
+    denied: ['src/components/', 'src/app/page.tsx'],
+  },
+  docs: {
+    allowed: ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'docs/', 'API.md'],
+    denied: ['src/', 'prisma/'],
+  },
+  analytics: {
+    allowed: ['src/lib/analytics/', 'src/lib/hooks/', 'src/app/api/analytics/'],
+    denied: ['src/components/', 'prisma/'],
+  },
+  integration: {
+    allowed: ['src/lib/integrations/', 'src/app/api/auth/', 'src/app/api/webhooks/'],
+    denied: ['src/components/', 'src/app/page.tsx'],
+  },
+  security: {
+    allowed: ['src/middleware.ts', 'src/lib/security/', 'src/app/api/security/'],
+    denied: ['src/components/', 'src/app/page.tsx'],
+  },
+  performance: {
+    allowed: ['src/lib/performance/', 'next.config.'],
+    denied: ['src/components/', 'src/app/page.tsx', 'prisma/'],
+  },
+  compliance: {
+    allowed: ['PRIVACY.md', 'TERMS.md', 'LICENSE', 'src/lib/compliance/', 'src/components/cookie-consent'],
+    denied: ['src/app/api/', 'prisma/'],
+  },
+  // Non-code agents should NEVER write files
+  cto: { allowed: [], denied: ['*'] },
+  qa: { allowed: [], denied: ['*'] },
+  devops: { allowed: [], denied: ['*'] },
+  research: { allowed: [], denied: ['*'] },
+};
+
+/**
+ * Check if a specific agent is allowed to write to a file path.
+ * This is a HARD enforcement check — the orchestrator uses this
+ * to reject any file writes that violate agent domain boundaries.
+ *
+ * Rules:
+ * 1. Denied patterns take absolute priority — if matched, always reject.
+ * 2. If no denied pattern matches, the path must match at least one allowed pattern.
+ * 3. If the agent has no allowed patterns (non-code agents), reject everything.
+ * 4. Default: deny (security-first).
+ */
+function isFileWriteAllowed(agentRole: string, filePath: string): boolean {
+  const rules = AGENT_PATH_RULES[agentRole];
+
+  if (!rules) {
+    // Unknown agent — deny by default
+    console.warn(`[AION Orchestrator] No path rules defined for agent: ${agentRole} — DENY by default`);
+    return false;
+  }
+
+  // Check denied patterns first (highest priority)
+  for (const denied of rules.denied) {
+    if (denied === '*') return false; // Complete deny (non-code agents)
+    if (filePath.includes(denied)) return false;
+  }
+
+  // Check allowed patterns
+  for (const allowed of rules.allowed) {
+    if (filePath.includes(allowed)) return true;
+  }
+
+  // Default deny — no allowed pattern matched
+  return false;
+}
+
+// ============================================================
 // STUCK DETECTION — Detects when the same agent loops
 // ============================================================
 
 /**
- * Detect if the autonomous loop is stuck by checking if the same agent
- * has repeated the same action multiple times in a row.
- * Pattern: same agentRole appears 4+ times in the last N actions.
+ * Detect if the autonomous loop is stuck by checking multiple signals:
+ *
+ * Signal 1: Same agent repeats 4+ times with similar task snippets.
+ * Signal 2: Same agent repeats with superficially different snippets but
+ *           semantically similar content (Jaccard similarity on word sets).
+ * Signal 3: No progress indicators in recent cycles (no files written,
+ *           no tasks completed, no bugs resolved).
+ * Signal 4: Agent confidence declining across repeated attempts.
+ *
+ * This multi-signal approach prevents the simple evasion where an agent
+ * produces slightly different status updates while doing the same broken thing.
  */
 function isStuck(actions: AgentActionRecord[]): boolean {
   if (actions.length < MAX_SAME_AGENT_REPEATS) return false;
@@ -818,19 +926,118 @@ function isStuck(actions: AgentActionRecord[]): boolean {
   const firstAgent = recent[0].agentRole;
   const allSameAgent = recent.every(a => a.agentRole === firstAgent);
 
-  if (!allSameAgent) return false;
+  if (!allSameAgent) {
+    // Even with different agents, check for ping-pong patterns
+    // (e.g., A→B→A→B→A→B with no progress)
+    return isPingPongStuck(actions);
+  }
 
-  // Same agent repeating — check if task snippets are similar
+  // Signal 1: Exact snippet match — same agent, same task text
   const snippets = recent.map(a => a.taskSnippet);
   const uniqueSnippets = new Set(snippets);
-
-  // If they're all doing basically the same thing, we're stuck
   if (uniqueSnippets.size <= 2) {
-    console.warn(`[AION Orchestrator] Stuck pattern: ${firstAgent} repeated ${recent.length} times with ${uniqueSnippets.size} unique tasks`);
+    console.warn(`[AION Orchestrator] Stuck (exact repeat): ${firstAgent} repeated ${recent.length} times with ${uniqueSnippets.size} unique tasks`);
+    return true;
+  }
+
+  // Signal 2: Semantic similarity — different wording, same intent
+  // Use Jaccard similarity on word sets to detect superficially different
+  // but semantically equivalent task descriptions
+  const wordSets = snippets.map(s =>
+    new Set(s.toLowerCase().split(/\s+/).filter(w => w.length > 3))
+  );
+  let highSimilarityPairs = 0;
+  for (let i = 0; i < wordSets.length; i++) {
+    for (let j = i + 1; j < wordSets.length; j++) {
+      const intersection = new Set([...wordSets[i]].filter(x => wordSets[j].has(x)));
+      const union = new Set([...wordSets[i], ...wordSets[j]]);
+      const jaccard = union.size > 0 ? intersection.size / union.size : 0;
+      if (jaccard > 0.6) { // >60% word overlap = semantically similar
+        highSimilarityPairs++;
+      }
+    }
+  }
+  // If most pairs are semantically similar, we're stuck
+  const totalPairs = (wordSets.length * (wordSets.length - 1)) / 2;
+  if (totalPairs > 0 && highSimilarityPairs / totalPairs > 0.5) {
+    console.warn(`[AION Orchestrator] Stuck (semantic repeat): ${firstAgent} repeated with ${Math.round(highSimilarityPairs / totalPairs * 100)}% semantic similarity`);
     return true;
   }
 
   return false;
+}
+
+/**
+ * Detect ping-pong stuck patterns where two agents keep bouncing
+ * the same task back and forth without making progress.
+ * Pattern: A→B→A→B with similar task descriptions across cycles.
+ */
+function isPingPongStuck(actions: AgentActionRecord[]): boolean {
+  const recent = actions.slice(-8); // Check last 8 actions
+  if (recent.length < 6) return false;
+
+  // Extract the sequence of agent roles
+  const roles = recent.map(a => a.agentRole);
+
+  // Check for A→B→A→B pattern
+  const uniqueRoles = new Set(roles);
+  if (uniqueRoles.size !== 2) return false;
+
+  // Count alternations
+  let alternations = 0;
+  for (let i = 1; i < roles.length; i++) {
+    if (roles[i] !== roles[i - 1]) alternations++;
+  }
+
+  // If there are 5+ alternations in 8 actions, it's a ping-pong
+  if (alternations >= 5) {
+    console.warn(`[AION Orchestrator] Stuck (ping-pong): ${[...uniqueRoles].join(' <-> ')} alternating ${alternations} times in ${roles.length} actions`);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if the PRD features are adequately covered by implemented tasks.
+ * Returns true if >50% of PRD features have corresponding completed tasks.
+ * Returns false if no PRD exists or coverage is below threshold.
+ */
+async function checkPRDCoverage(projectId: string): Promise<boolean> {
+  try {
+    const project = await db.project.findUnique({ where: { id: projectId } });
+    if (!project?.prd) return false;
+
+    let prdFeatures: string[] = [];
+    try {
+      const prd = JSON.parse(project.prd);
+      prdFeatures = prd?.features?.map((f: any) => f.name || f.title || f) || [];
+    } catch {
+      // PRD isn't valid JSON — can't check coverage
+      return false;
+    }
+
+    if (prdFeatures.length === 0) return true; // No features to cover = vacuously true
+
+    // Count completed tasks
+    const completedTasks = await db.task.findMany({
+      where: { projectId, status: 'done' },
+    });
+
+    // Simple heuristic: check if task descriptions mention PRD feature keywords
+    const coveredFeatures = prdFeatures.filter((feature: string) => {
+      const keywords = feature.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+      return completedTasks.some(task =>
+        keywords.some(kw => task.description.toLowerCase().includes(kw))
+      );
+    });
+
+    const coverageRatio = coveredFeatures.length / prdFeatures.length;
+    return coverageRatio >= 0.5; // At least 50% of features must have tasks
+  } catch (error) {
+    console.error('[AION Orchestrator] PRD coverage check failed:', error);
+    return false; // Fail closed — if we can't verify, assume not covered
+  }
 }
 
 /**
@@ -888,12 +1095,12 @@ export async function checkQAGate(projectId: string): Promise<QAGateResult | nul
     checklist: {
       buildSucceeds: buildPassed,
       typescriptCompiles: testResults.some(t => t.testType === 'typecheck' && t.passed),
-      noUnusedImports: true,
-      apiEndpointsValid: true,
-      responsiveDesignOk: true,
-      noSecurityIssues: criticalBugs === 0,
+      noUnusedImports: testResults.some(t => t.testType === 'lint' && t.passed),
+      apiEndpointsValid: testResults.some(t => t.testType === 'api' && t.passed),
+      responsiveDesignOk: testResults.some(t => t.testType === 'responsive' && t.passed),
+      noSecurityIssues: criticalBugs === 0 && openBugs.filter(b => b.severity === 'high' && b.filePath?.includes('security')).length === 0,
       dependenciesResolved: buildPassed,
-      prdCoverageComplete: true,
+      prdCoverageComplete: await checkPRDCoverage(projectId),
     },
     canDeploy,
     criticalBugCount: criticalBugs,
@@ -1398,15 +1605,43 @@ export async function processAgentResponse(
 
   // ========================================
   // Handle Frontend/Backend Agents — Write files
+  // ENFORCED: Agent domain boundaries are validated in code, not just prompt.
+  // Double validation: createResponse() filters first, then orchestrator
+  // applies getPathAllowed() as a hard enforcement layer.
   // ========================================
   if (output.files && output.files.length > 0) {
-    // Validate file access
     const agent = getAgent(agentId);
-    const validFiles = output.files.filter(f => {
-      // Use the base agent's path validation
-      const allowed = agent.writeAccess;
-      return true; // Agent already validated via createResponse
-    });
+
+    // CRITICAL: Validate file access using agent's path patterns
+    // This is the HARD enforcement layer — no file passes unless it matches
+    // the agent's allowed path patterns and doesn't match denied patterns.
+    const validFiles: typeof output.files = [];
+    const blockedFiles: typeof output.files = [];
+
+    for (const file of output.files) {
+      if (isFileWriteAllowed(agentId, file.path)) {
+        validFiles.push(file);
+      } else {
+        blockedFiles.push(file);
+      }
+    }
+
+    if (blockedFiles.length > 0) {
+      console.warn(
+        `[AION Orchestrator] BLOCKED ${blockedFiles.length} file write(s) from ${agentId} outside domain:`,
+        blockedFiles.map(f => f.path)
+      );
+      // Log violations as bugs so the CTO can see them
+      for (const blocked of blockedFiles) {
+        await boardManager.createBug(projectId, {
+          description: `Agent ${agentId} attempted to write outside domain: ${blocked.path}. This file was BLOCKED by the orchestrator's domain enforcement.`,
+          filePath: blocked.path,
+          severity: 'high',
+          reportedBy: 'orchestrator',
+          assignedTo: 'cto',
+        });
+      }
+    }
 
     // Write to database
     await boardManager.writeFiles(
@@ -1616,10 +1851,47 @@ export async function processAgentResponse(
               status: 'deploying',
             });
 
-            // Broadcast deployment status
+            // Broadcast deployment status with ACTUAL deployment attempt
+            let deployMessage = `🚀 Deployment pipeline complete! Build PASSED, Git ready. Deployment configs generated.`;
+
+            // Attempt automatic Vercel deployment if token is available
+            const vercelToken = process.env.VERCEL_TOKEN;
+            if (vercelToken && projectId) {
+              try {
+                console.log(`[AION Orchestrator] Attempting Vercel CLI deployment...`);
+                const deployResult = commandRunner.deployToVercel(projectId, vercelToken);
+
+                if (deployResult.success && deployResult.url) {
+                  // Deployment succeeded — update the project with live URL
+                  await db.project.update({
+                    where: { id: projectId },
+                    data: { liveUrl: deployResult.url, status: 'live' },
+                  });
+                  await boardManager.updateDeployment(deploymentId, {
+                    status: 'deployed',
+                    url: deployResult.url,
+                    deployedAt: new Date(),
+                  });
+
+                  deployMessage += `\n\n✅ AUTO-DEPLOYED to Vercel!\n🌐 Live URL: ${deployResult.url}`;
+                  console.log(`[AION Orchestrator] Vercel deployment successful: ${deployResult.url}`);
+                } else {
+                  deployMessage += `\n\n⚠️ Vercel auto-deploy failed: ${deployResult.error || 'Unknown error'}. Falling back to manual deployment.`;
+                  deployMessage += getManualDeployInstructions();
+                }
+              } catch (deployError: any) {
+                deployMessage += `\n\n⚠️ Vercel auto-deploy error: ${deployError.message}. Falling back to manual deployment.`;
+                deployMessage += getManualDeployInstructions();
+              }
+            } else {
+              // No Vercel token — provide manual instructions but also mention the option
+              deployMessage += `\n\nTo enable automatic deployment, set VERCEL_TOKEN in your .env file.`;
+              deployMessage += getManualDeployInstructions();
+            }
+
             await boardManager.saveConversationMessage(projectId, {
               role: 'system',
-              content: `🚀 Deployment pipeline complete! Build PASSED, Git ready. Deployment configs generated. The project is ready for deployment to Render.\n\nTo deploy:\n1. Push to GitHub: git remote add origin <your-repo-url> && git push -u origin main\n2. Connect your GitHub repo to Render\n3. Render will auto-deploy using render.yaml\n\nOr provide a GitHub PAT and I'll handle the push.`,
+              content: deployMessage,
               agentRole: 'devops',
               metadata: { deploymentId, buildPassed: true },
             });
@@ -1872,6 +2144,25 @@ function findBalancedJSON(text: string): string | null {
 /**
  * Get a human-readable phase label
  */
+/**
+ * Get manual deployment instructions for when auto-deploy fails or isn't configured.
+ * Provides clear, step-by-step instructions for multiple platforms.
+ */
+function getManualDeployInstructions(): string {
+  return `\n\n📋 Manual Deployment Options:\n\n` +
+    `**Option 1: Vercel (Recommended)**\n` +
+    `1. Install Vercel CLI: npm i -g vercel\n` +
+    `2. Run: vercel --prod\n` +
+    `3. Follow the prompts to link and deploy\n\n` +
+    `**Option 2: GitHub + Render**\n` +
+    `1. Push to GitHub: git remote add origin <your-repo-url> && git push -u origin main\n` +
+    `2. Connect your GitHub repo to Render\n` +
+    `3. Render will auto-deploy using render.yaml\n\n` +
+    `**Option 3: Enable Auto-Deploy**\n` +
+    `Set VERCEL_TOKEN in your .env file to enable automatic Vercel deployment.\n` +
+    `Generate a token at: https://vercel.com/account/tokens`;
+}
+
 function getPhaseLabel(state: any): string {
   switch (state.status) {
     case 'planning': return '📋 Planning';

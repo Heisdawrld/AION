@@ -50,5 +50,29 @@ test
 prompt
 
 server.log
-# Skills directory
+
+# Skills directory (internal tool skills, not part of AION)
 /skills/
+
+# Database files (runtime data, never commit)
+db/
+*.db
+*.db-journal
+
+# Workspace files (generated at runtime by agents)
+workspaces/
+
+# Agent context files (build artifacts)
+agent-ctx/
+
+# Memory files (runtime state)
+memory/
+
+# Download directory
+download/
+
+# Example files
+examples/
+
+# Caddy config (deployment-specific)
+Caddyfile

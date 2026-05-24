@@ -435,6 +435,63 @@ export class CommandRunner {
 
     return checklist;
   }
+
+  /**
+   * Deploy a project to Vercel using the Vercel CLI.
+   * Requires VERCEL_TOKEN to be set in environment.
+   * Returns the deployment URL on success.
+   */
+  deployToVercel(projectId: string, token: string): { success: boolean; url?: string; error?: string } {
+    if (IS_VERCEL) {
+      return {
+        success: false,
+        error: 'Cannot deploy from within Vercel serverless environment. Use Vercel CLI locally or set up a CI/CD pipeline.',
+      };
+    }
+
+    const { execSync } = require('child_process');
+    const workspacePath = workspaceManager.getWorkspacePath(projectId);
+
+    try {
+      // Deploy using Vercel CLI with token authentication
+      // --yes accepts default settings, --prod deploys to production
+      const stdout = execSync(
+        `npx vercel --prod --yes --token ${token} 2>&1`,
+        {
+          cwd: workspacePath,
+          timeout: 300000, // 5 min timeout for deployment
+          encoding: 'utf-8',
+          maxBuffer: 1024 * 1024 * 5,
+          env: {
+            ...process.env,
+            VERCEL_TOKEN: token,
+            NODE_ENV: 'production',
+          },
+        }
+      );
+
+      // Parse the deployment URL from Vercel CLI output
+      // The last line of successful deployment is the URL
+      const lines = stdout.trim().split('\n').filter((l: string) => l.trim());
+      const urlLine = lines.find((l: string) => l.includes('https://') && l.includes('.vercel.app'));
+      const url = urlLine?.trim() || lines[lines.length - 1]?.trim();
+
+      if (url && url.startsWith('https://')) {
+        console.log(`[AION CommandRunner] Vercel deployment successful: ${url}`);
+        return { success: true, url };
+      }
+
+      return {
+        success: true,
+        url: url || undefined,
+        error: url ? undefined : 'Could not parse deployment URL from Vercel output',
+      };
+    } catch (error: any) {
+      const errorMessage = error.message?.substring(0, 500) || 'Unknown Vercel deployment error';
+      console.error(`[AION CommandRunner] Vercel deployment failed:`, errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  }
 }
 
 // Singleton
