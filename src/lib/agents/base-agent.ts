@@ -216,9 +216,22 @@ export abstract class BaseAgent {
         return ['src/app/api/', 'prisma/', 'src/lib/server/', 'src/lib/db.ts'];
       case 'business':
         return ['README.md', 'docs/']; // Business agent writes README and docs
+      case 'design':
+        return ['src/components/', 'src/app/', 'public/', 'globals.css', 'tailwind.config.'];
+      case 'data':
+        return ['prisma/', 'src/lib/db.ts', 'src/lib/server/', 'src/app/api/'];
+      case 'docs':
+        return ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'docs/', 'API.md'];
+      case 'analytics':
+        return ['src/lib/analytics/', 'src/lib/hooks/', 'src/app/api/analytics/'];
+      case 'integration':
+        return ['src/lib/integrations/', 'src/app/api/auth/', 'src/app/api/webhooks/'];
+      case 'security':
+        return ['src/middleware.ts', 'src/lib/security/', 'src/app/api/security/'];
       case 'cto':
       case 'qa':
       case 'devops':
+      case 'research':
         return []; // Non-code agents don't write files directly
       default:
         return [];

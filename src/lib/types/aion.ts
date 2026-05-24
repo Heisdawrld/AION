@@ -5,9 +5,9 @@
 // AGENT TYPES
 // ============================================================
 
-export type AgentRole = 'cto' | 'frontend' | 'backend' | 'qa' | 'devops' | 'business';
+export type AgentRole = 'cto' | 'frontend' | 'backend' | 'qa' | 'devops' | 'business' | 'research' | 'security' | 'design' | 'data' | 'docs' | 'analytics' | 'integration';
 
-export const AGENT_ROLES: AgentRole[] = ['cto', 'frontend', 'backend', 'qa', 'devops', 'business'];
+export const AGENT_ROLES: AgentRole[] = ['cto', 'frontend', 'backend', 'qa', 'devops', 'business', 'research', 'security', 'design', 'data', 'docs', 'analytics', 'integration'];
 
 export const AGENT_NAMES: Record<AgentRole, string> = {
   cto: 'Lead CTO',
@@ -16,6 +16,13 @@ export const AGENT_NAMES: Record<AgentRole, string> = {
   qa: 'QA Engineer',
   devops: 'DevOps Lead',
   business: 'Business Strategist',
+  research: 'Research Analyst',
+  security: 'Security Engineer',
+  design: 'Design Architect',
+  data: 'Data Engineer',
+  docs: 'Documentation Lead',
+  analytics: 'Analytics Engineer',
+  integration: 'Integration Specialist',
 };
 
 export const AGENT_EMOJIS: Record<AgentRole, string> = {
@@ -25,15 +32,29 @@ export const AGENT_EMOJIS: Record<AgentRole, string> = {
   qa: '🧪',
   devops: '🚀',
   business: '💼',
+  research: '🔍',
+  security: '🛡️',
+  design: '✏️',
+  data: '🗄️',
+  docs: '📖',
+  analytics: '📊',
+  integration: '🔗',
 };
 
 export const AGENT_COLORS: Record<AgentRole, string> = {
-  cto: '#f59e0b',    // amber
-  frontend: '#8b5cf6', // violet
-  backend: '#10b981',  // emerald
-  qa: '#ef4444',      // red
-  devops: '#3b82f6',   // blue
-  business: '#f97316', // orange
+  cto: '#f59e0b',       // amber
+  frontend: '#8b5cf6',  // violet
+  backend: '#10b981',   // emerald
+  qa: '#ef4444',        // red
+  devops: '#3b82f6',    // blue
+  business: '#f97316',  // orange
+  research: '#06b6d4',  // cyan
+  security: '#dc2626',  // red-600
+  design: '#ec4899',    // pink
+  data: '#14b8a6',      // teal
+  docs: '#6366f1',      // indigo
+  analytics: '#84cc16', // lime
+  integration: '#a855f7', // purple
 };
 
 // Agent write boundaries — what each agent can write to
@@ -44,6 +65,13 @@ export const AGENT_WRITE_ACCESS: Record<AgentRole, string[]> = {
   qa: ['testResults', 'openBugs', 'resolvedBugs', 'agentLog'],
   devops: ['buildStatus', 'deployStatus', 'githubStatus', 'liveUrl', 'urlTestResult', 'agentLog'],
   business: ['prd', 'userStories', 'mvpScope', 'agentLog', 'readme', 'statusReports', 'deploymentNotifications'],
+  research: ['researchData', 'marketInsights', 'competitorAnalysis', 'agentLog'],
+  security: ['securityAudit', 'vulnerabilityReport', 'agentLog'],
+  design: ['fileManifest:design', 'designSystem', 'agentLog'],
+  data: ['fileManifest:data', 'schemaMigrations', 'agentLog'],
+  docs: ['fileManifest:docs', 'apiDocs', 'agentLog'],
+  analytics: ['fileManifest:analytics', 'trackingSetup', 'agentLog'],
+  integration: ['fileManifest:integration', 'apiIntegrations', 'agentLog'],
 };
 
 export const AGENT_DENIED_ACCESS: Record<AgentRole, string[]> = {
@@ -53,6 +81,13 @@ export const AGENT_DENIED_ACCESS: Record<AgentRole, string[]> = {
   qa: ['fileManifest'],
   devops: ['fileManifest'],
   business: ['fileManifest', 'taskQueue', 'testResults', 'deployStatus'],
+  research: ['fileManifest', 'taskQueue', 'deployStatus'],
+  security: ['fileManifest:frontend', 'fileManifest:backend', 'taskQueue'],
+  design: ['src/app/api/**', 'prisma/**', 'testResults', 'deployStatus'],
+  data: ['src/components/**', 'src/app/**/page.tsx', 'deployStatus'],
+  docs: ['src/app/api/**', 'prisma/**', 'deployStatus'],
+  analytics: ['src/app/api/**', 'prisma/**', 'src/components/**', 'deployStatus'],
+  integration: ['src/components/**', 'src/app/**/page.tsx', 'testResults'],
 };
 
 // ============================================================
@@ -510,4 +545,210 @@ export interface BusinessReportOutput {
   deploymentNotification?: DeploymentNotification;
   readme?: READMEContent;
   risks?: RiskEntry[];
+}
+
+// ============================================================
+// RESEARCH TYPES (Research Agent — Web Search & Scraping)
+// ============================================================
+
+export interface WebSearchResult {
+  url: string;
+  title: string;
+  snippet: string;
+  source: string;
+  relevanceScore: number;
+}
+
+export interface ScrapedContent {
+  url: string;
+  title: string;
+  content: string;
+  wordCount: number;
+  scrapedAt: string;
+}
+
+export interface ResearchReport {
+  topic: string;
+  searchQueries: string[];
+  sourcesFound: number;
+  sourcesAnalyzed: number;
+  keyFindings: string[];
+  competitorInsights: CompetitorInsight[];
+  marketData: MarketDataPoint[];
+  technicalReferences: TechnicalReference[];
+  recommendations: string[];
+  confidence: number;
+}
+
+export interface CompetitorInsight {
+  name: string;
+  url: string;
+  strengths: string[];
+  weaknesses: string[];
+  features: string[];
+  pricing?: string;
+}
+
+export interface MarketDataPoint {
+  metric: string;
+  value: string;
+  source: string;
+  date?: string;
+}
+
+export interface TechnicalReference {
+  technology: string;
+  documentationUrl: string;
+  version?: string;
+  keyCapabilities: string[];
+  integrationComplexity: 'low' | 'medium' | 'high';
+}
+
+// ============================================================
+// SECURITY TYPES (Security Agent — Audits & Vulnerability Scanning)
+// ============================================================
+
+export interface SecurityAuditResult {
+  overallRisk: 'critical' | 'high' | 'medium' | 'low' | 'clean';
+  vulnerabilities: SecurityVulnerability[];
+  owaspCompliance: OWASPCheck[];
+  secretsScanned: boolean;
+  secretsFound: number;
+  dependenciesScanned: boolean;
+  vulnerableDependencies: number;
+  headersScore: number;
+  score: number;
+}
+
+export interface SecurityVulnerability {
+  id: string;
+  title: string;
+  description: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  category: 'injection' | 'auth' | 'xss' | 'csrf' | 'secrets' | 'deps' | 'headers' | 'config' | 'dos' | 'other';
+  filePath?: string;
+  line?: number;
+  cwe?: string;
+  remediation: string;
+  evidence?: string;
+}
+
+export interface OWASPCheck {
+  category: string;
+  categoryCode: string;
+  status: 'pass' | 'fail' | 'warning' | 'not_applicable';
+  details: string;
+}
+
+// ============================================================
+// DESIGN TYPES (Design Agent — UI/UX, Design Systems)
+// ============================================================
+
+export interface DesignSystemSpec {
+  colors: ColorToken[];
+  typography: TypographySpec;
+  spacing: SpacingScale;
+  borderRadius: string[];
+  shadows: string[];
+  components: ComponentSpec[];
+}
+
+export interface ColorToken {
+  name: string;
+  value: string;
+  usage: string;
+}
+
+export interface TypographySpec {
+  fonts: { family: string; weights: number[] }[];
+  headingScale: { name: string; size: string; weight: number; lineHeight: string }[];
+  bodyScale: { name: string; size: string; weight: number; lineHeight: string }[];
+}
+
+export interface SpacingScale {
+  values: { name: string; value: string; pixels: number }[];
+}
+
+export interface ComponentSpec {
+  name: string;
+  variants: string[];
+  states: string[];
+  description: string;
+}
+
+// ============================================================
+// DATA ENGINEER TYPES (Data Agent — DB, Migrations, Pipelines)
+// ============================================================
+
+export interface SchemaAnalysis {
+  models: SchemaModel[];
+  relationships: SchemaRelationship[];
+  indexes: SchemaIndex[];
+  missingIndexes: SchemaIndex[];
+  nPlusOneRisks: string[];
+  migrationPlan?: string;
+}
+
+export interface SchemaModel {
+  name: string;
+  fields: number;
+  hasTimestamps: boolean;
+  hasSoftDelete: boolean;
+  relationships: string[];
+}
+
+export interface SchemaRelationship {
+  from: string;
+  to: string;
+  type: 'one-to-one' | 'one-to-many' | 'many-to-many';
+  indexed: boolean;
+}
+
+export interface SchemaIndex {
+  table: string;
+  fields: string[];
+  type: 'unique' | 'btree' | 'composite';
+  reason: string;
+}
+
+// ============================================================
+// ANALYTICS TYPES (Analytics Agent — Metrics, Tracking, A/B)
+// ============================================================
+
+export interface AnalyticsSetup {
+  trackingPlan: TrackingEvent[];
+  dashboards: DashboardSpec[];
+  abTests: ABTestSpec[];
+  metrics: MetricDefinition[];
+}
+
+export interface TrackingEvent {
+  name: string;
+  description: string;
+  properties: { name: string; type: string; required: boolean }[];
+  trigger: string;
+}
+
+export interface DashboardSpec {
+  name: string;
+  metrics: string[];
+  filters: string[];
+  refreshInterval: string;
+}
+
+export interface ABTestSpec {
+  name: string;
+  hypothesis: string;
+  controlVariant: string;
+  testVariant: string;
+  targetMetric: string;
+  minSampleSize: number;
+  duration: string;
+}
+
+export interface MetricDefinition {
+  name: string;
+  type: 'counter' | 'gauge' | 'histogram' | 'ratio';
+  description: string;
+  unit?: string;
 }

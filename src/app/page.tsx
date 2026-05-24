@@ -41,6 +41,13 @@ const AGENT_DESCRIPTIONS: Record<AgentRole, string> = {
   qa: 'Tests code, catches bugs, validates quality',
   devops: 'Deploys to GitHub & Render, tests URLs',
   business: 'Creates PRDs, defines features & scope',
+  research: 'Searches the web, scrapes sites, gathers market intelligence',
+  security: 'Audits code for vulnerabilities, scans secrets, OWASP checks',
+  design: 'Designs UI/UX, builds design systems, ensures accessibility',
+  data: 'Optimizes databases, manages schemas, designs migrations',
+  docs: 'Auto-generates README, API docs, and guides',
+  analytics: 'Sets up tracking, dashboards, and A/B testing',
+  integration: 'Connects third-party APIs, OAuth, webhooks',
 };
 
 export default function AIONHome() {

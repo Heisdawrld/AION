@@ -914,12 +914,26 @@ export async function checkQAGate(projectId: string): Promise<QAGateResult | nul
  * NOW WITH QA GATE ENFORCEMENT: DevOps can ONLY run after QA approval
  */
 async function determineNextAction(state: any): Promise<NextAction> {
-  // Priority 1: If no PRD, Business Agent creates one
+  // Priority 0: If no PRD, Research Agent does market research FIRST
   if (!state.prd) {
+    // Check if research has already been done
+    const hasResearch = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'research' },
+    });
+
+    if (!hasResearch) {
+      return {
+        type: 'run_agent',
+        agent: 'research',
+        task: 'Research this project idea before we build it. Find competitors, market data, technical approaches, and user needs. Search the web for similar products, market size, and best practices. Provide evidence-backed recommendations that will inform the PRD.',
+      };
+    }
+
+    // Research done — now Business Agent creates PRD with research insights
     return {
       type: 'run_agent',
       agent: 'business',
-      task: 'Create a comprehensive PRD for this project based on the user\'s description. Define features, user stories, MVP scope, and success criteria.',
+      task: 'Create a comprehensive PRD for this project based on the user\'s description AND the research findings. Define features, user stories, MVP scope, and success criteria. Incorporate market data and competitor insights from the Research Analyst.',
     };
   }
 
@@ -1023,7 +1037,21 @@ async function determineNextAction(state: any): Promise<NextAction> {
   if (state.status === 'testing') {
     const qaGate = await checkQAGate(state.projectId);
     if (qaGate?.canDeploy) {
-      // QA passed — look for a DevOps task or create one
+      // QA passed — run Security audit before DevOps deploys
+      const hasSecurityAudit = await db.agentLog.findFirst({
+        where: { projectId: state.projectId, agentRole: 'security' },
+      });
+
+      if (!hasSecurityAudit) {
+        console.log(`[AION Orchestrator] QA passed — running security audit before deployment`);
+        return {
+          type: 'run_agent',
+          agent: 'security',
+          task: 'Run a full security audit on this project. Scan for hardcoded secrets, audit dependencies for CVEs, review source code for vulnerabilities, check OWASP Top 10 compliance, and generate security middleware with HTTP headers. Report all findings with severity levels and remediation steps.',
+        };
+      }
+
+      // Security audit done — look for a DevOps task or create one
       const devopsTask = await db.task.findFirst({
         where: { projectId: state.projectId, assignedTo: 'devops', status: 'pending' },
       });
@@ -1062,9 +1090,9 @@ async function determineNextAction(state: any): Promise<NextAction> {
     };
   }
 
-  // Priority 6: If deployed and live, check if Business Agent has run post-launch tasks
+  // Priority 6: If deployed and live, run post-launch agents in sequence
   if (state.liveUrl && state.status === 'live') {
-    // Check if Business Agent has already generated README and deployment notification
+    // Step 1: Business Agent generates README and deployment notification
     const recentBizActivity = await db.agentLog.findFirst({
       where: {
         projectId: state.projectId,
@@ -1075,8 +1103,7 @@ async function determineNextAction(state: any): Promise<NextAction> {
     });
 
     if (!recentBizActivity) {
-      // Business Agent hasn't run post-launch tasks yet — generate README and notify
-      console.log(`[AION Orchestrator] Project is LIVE — triggering Business Agent post-launch tasks (README + notification)`);
+      console.log(`[AION Orchestrator] Project is LIVE — triggering Business Agent post-launch tasks`);
       return {
         type: 'run_agent',
         agent: 'business',
@@ -1084,28 +1111,51 @@ async function determineNextAction(state: any): Promise<NextAction> {
       };
     }
 
-    // Check if there's a pending README generation task
-    const readmeTask = await db.task.findFirst({
-      where: {
-        projectId: state.projectId,
-        assignedTo: 'business',
-        status: 'pending',
-        description: { contains: 'readme' },
-      },
+    // Step 2: Documentation Agent generates full API docs and guides
+    const hasDocs = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'docs' },
     });
 
-    if (readmeTask) {
-      await boardManager.updateTaskStatus(readmeTask.id, 'in_progress');
+    if (!hasDocs) {
+      console.log(`[AION Orchestrator] Project is LIVE — generating documentation`);
       return {
         type: 'run_agent',
-        agent: 'business',
-        task: buildTaskInstruction('business', readmeTask.description),
+        agent: 'docs',
+        task: 'The project is now LIVE. Generate comprehensive documentation: README with quick start, API reference with curl and JavaScript examples for every endpoint, environment variables table, and contributing guide. Base everything on the ACTUAL source code in the workspace.',
+      };
+    }
+
+    // Step 3: Analytics Agent sets up tracking
+    const hasAnalytics = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'analytics' },
+    });
+
+    if (!hasAnalytics) {
+      console.log(`[AION Orchestrator] Project is LIVE — setting up analytics tracking`);
+      return {
+        type: 'run_agent',
+        agent: 'analytics',
+        task: 'The project is now LIVE. Set up analytics tracking: design a tracking plan with key events (page_view, user_signed_up, feature_used, error_occurred), create an analytics utility with React hook, build a dashboard specification for monitoring key metrics, and design an A/B test framework. Implement using a lightweight, privacy-respecting approach.',
+      };
+    }
+
+    // Step 4: Integration Agent sets up essential integrations
+    const hasIntegration = await db.agentLog.findFirst({
+      where: { projectId: state.projectId, agentRole: 'integration' },
+    });
+
+    if (!hasIntegration) {
+      console.log(`[AION Orchestrator] Project is LIVE — setting up integrations`);
+      return {
+        type: 'run_agent',
+        agent: 'integration',
+        task: 'The project is now LIVE. Set up essential third-party integrations: error tracking (Sentry-compatible), email notifications (with a provider-agnostic interface), and webhook infrastructure. Use environment variables for all API keys. Implement with retry logic, circuit breakers, and proper error handling.',
       };
     }
 
     return {
       type: 'complete',
-      message: '🎉 Project is LIVE and deployed!',
+      message: '🎉 Project is LIVE, documented, secured, tracked, and integrated!',
     };
   }
 
@@ -1160,6 +1210,27 @@ function buildTaskInstruction(agentRole: AgentRole, taskDescription: string): st
 
     case 'cto':
       return `${taskDescription}\n\nAs the Lead CTO, make a clear decision and create specific task assignments if needed.`;
+
+    case 'research':
+      return `${taskDescription}\n\nAs the Research Analyst, search the web for relevant information, scrape key sources, and provide evidence-backed findings. Use web_search for real-time data and web_reader for detailed content extraction. Cite all sources with URLs. Provide actionable intelligence, not just raw data.`;
+
+    case 'security':
+      return `${taskDescription}\n\nAs the Security Engineer, perform a thorough security audit. Scan for hardcoded secrets, audit dependencies with npm audit, review source code for vulnerabilities, check OWASP Top 10 compliance, and generate security configuration files. Every finding must have a file path, severity, and remediation.`;
+
+    case 'design':
+      return `${taskDescription}\n\nAs the Design Architect, create UI/UX components with proper design systems, accessibility (WCAG 2.1 AA), mobile-first responsive design, and Tailwind CSS. Return ALL file changes in the "files" array. Include design system specs (colors, typography, spacing). Use shadcn/ui components where available.`;
+
+    case 'data':
+      return `${taskDescription}\n\nAs the Data Engineer, design and optimize database schemas using Prisma ORM. Include proper indexes, relationships, constraints, and migration plans. Return ALL file changes in the "files" array. Document the schema analysis, missing indexes, and N+1 query risks.`;
+
+    case 'docs':
+      return `${taskDescription}\n\nAs the Documentation Lead, generate comprehensive documentation based on ACTUAL source code. Include README, API documentation with curl and JavaScript examples, environment variable tables, and quick start guides. Return ALL documentation files in the "files" array.`;
+
+    case 'analytics':
+      return `${taskDescription}\n\nAs the Analytics Engineer, design and implement tracking plans, analytics SDK integration, dashboard specifications, and A/B test frameworks. Return ALL file changes in the "files" array. Define events with clear schemas and properties. Respect user privacy (no PII in events, opt-out support).`;
+
+    case 'integration':
+      return `${taskDescription}\n\nAs the Integration Specialist, build third-party API integrations with proper error handling, retry logic, OAuth flows, and webhook processing. Return ALL file changes in the "files" array. Use environment variables for all API keys. Implement circuit breakers and rate limiting. Verify webhook signatures.`;
 
     default:
       return taskDescription;

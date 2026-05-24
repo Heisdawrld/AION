@@ -1,5 +1,6 @@
 // AION — Agent Registry
 // Creates and provides access to all agent instances
+// 13 agents — from planning to production, research to security
 
 import type { AgentRole } from '@/lib/types/aion';
 import { BaseAgent } from './base-agent';
@@ -9,6 +10,13 @@ import { FrontendLeadAgent } from './frontend-lead';
 import { BackendLeadAgent } from './backend-lead';
 import { QAEngineerAgent } from './qa-engineer';
 import { DevOpsLeadAgent } from './devops-lead';
+import { ResearchAnalystAgent } from './research-analyst';
+import { SecurityEngineerAgent } from './security-engineer';
+import { DesignArchitectAgent } from './design-architect';
+import { DataEngineerAgent } from './data-engineer';
+import { DocumentationLeadAgent } from './docs-lead';
+import { AnalyticsEngineerAgent } from './analytics-engineer';
+import { IntegrationSpecialistAgent } from './integration-specialist';
 
 // Singleton instances
 const agents: Map<AgentRole, BaseAgent> = new Map();
@@ -34,6 +42,27 @@ export function getAgent(role: AgentRole): BaseAgent {
       case 'devops':
         agents.set(role, new DevOpsLeadAgent());
         break;
+      case 'research':
+        agents.set(role, new ResearchAnalystAgent());
+        break;
+      case 'security':
+        agents.set(role, new SecurityEngineerAgent());
+        break;
+      case 'design':
+        agents.set(role, new DesignArchitectAgent());
+        break;
+      case 'data':
+        agents.set(role, new DataEngineerAgent());
+        break;
+      case 'docs':
+        agents.set(role, new DocumentationLeadAgent());
+        break;
+      case 'analytics':
+        agents.set(role, new AnalyticsEngineerAgent());
+        break;
+      case 'integration':
+        agents.set(role, new IntegrationSpecialistAgent());
+        break;
       default:
         throw new Error(`Unknown agent role: ${role}`);
     }
@@ -43,7 +72,10 @@ export function getAgent(role: AgentRole): BaseAgent {
 
 export function getAllAgents(): Map<AgentRole, BaseAgent> {
   // Initialize all agents
-  for (const role of ['cto', 'business', 'frontend', 'backend', 'qa', 'devops'] as AgentRole[]) {
+  for (const role of [
+    'cto', 'business', 'frontend', 'backend', 'qa', 'devops',
+    'research', 'security', 'design', 'data', 'docs', 'analytics', 'integration',
+  ] as AgentRole[]) {
     getAgent(role);
   }
   return agents;
