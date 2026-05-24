@@ -1,4 +1,5 @@
-# MASTER PLAN — Autonomous Multi-Agent Development Platform
+# MASTER PLAN — AION
+> Autonomous Intelligent Orchestration Network
 > Version: 1.0 | Created: 2026-05-24 | Status: PLANNING
 > This is the SINGLE SOURCE OF TRUTH for the entire project.
 > Every agent, every rule, every decision is documented here.
@@ -934,7 +935,7 @@ Level 4: User notification (ask for guidance)
 # render.yaml
 services:
   - type: web
-    name: agent-platform
+    name: aion
     runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -1063,7 +1064,7 @@ model Deployment {
 ## 11. FILE STRUCTURE
 
 ```
-agent-platform/
+aion/
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx

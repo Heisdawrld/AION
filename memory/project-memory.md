@@ -7,7 +7,7 @@
 
 ## PROJECT IDENTITY
 
-- **Name:** TBD (user to decide)
+- **Name:** AION
 - **Type:** Multi-Agent Autonomous Software Development Platform
 - **Goal:** Build a prototype where 6 AI agents work together autonomously to build, test, and ship full apps
 - **Host Target:** Render (free tier)
@@ -88,7 +88,7 @@
 
 ## OPEN QUESTIONS
 
-1. Project name? — User to decide
+1. ~~Project name?~~ — DECIDED: **AION**
 2. GitHub PAT — User to provide when ready
 3. Deploy target — Render only? Or also Vercel/Netlify?
 4. Auth — Simple password? None? NextAuth?
@@ -103,4 +103,13 @@
 - Defined 6 agents: CTO, Frontend, Backend, QA, DevOps, Business
 - User's top concern: NO hallucination, wants "perfect" system
 - User requested a comprehensive plan + memory system
-- Next: Create Master Plan document
+- Created Master Plan document (15 sections)
+- Created project memory file
+- Created 7-layer anti-hallucination architecture
+- Created 3-layer memory system
+- Defined all agent system prompts
+
+### Session 2 (2026-05-24)
+- User named the project: **AION**
+- Updated all documentation with project name
+- Ready to begin Phase 1: Foundation
