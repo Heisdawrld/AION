@@ -1,24 +1,16 @@
 # AION — Render Deployment Configuration
-# https://render.com/docs/blueprint-spec
+# Uses Turso for database (no Render PostgreSQL needed)
 #
 # HOW TO DEPLOY:
-# 1. Go to https://dashboard.render.com
-# 2. Click "New" → "Blueprint"
-# 3. Connect your GitHub repo: Heisdawrld/AION
-# 4. Render will auto-detect this render.yaml
-# 5. Set AION_API_KEY manually in the web service environment
-# 6. Deploy!
+# 1. Create a Turso database: turso db create aion
+# 2. Get the URL: turso db show aion --url
+# 3. Get the auth token: turso db tokens create aion
+# 4. Go to https://dashboard.render.com
+# 5. Create a new Web Service connected to Heisdawrld/AION
+# 6. Set environment variables (see below)
+# 7. Deploy!
 
 services:
-  # PostgreSQL Database (free tier — 90 day limit)
-  - type: pserv
-    name: aion-db
-    runtime: postgresql
-    plan: free
-    # Free tier: 1GB storage, expires after 90 days
-    # Upgrade to "Starter" ($7/mo) for persistent storage
-
-  # Web Application
   - type: web
     name: aion
     runtime: node
@@ -31,12 +23,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromService:
-          name: aion-db
-          type: pserv
-          property: connectionString
+        sync: false  # Set to your Turso URL: libsql://aion-xxxx.turso.io
+      - key: DATABASE_AUTH_TOKEN
+        sync: false  # Set to your Turso auth token
       - key: AION_API_KEY
-        sync: false  # Set this manually in Render dashboard!
-      - key: PORT
-        value: 10000
+        sync: false  # Generate with: openssl rand -hex 32
     healthCheckPath: /api/health

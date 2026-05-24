@@ -1,12 +1,13 @@
 // AION — Autonomous Intelligent Orchestration Network
-// Database Schema (PostgreSQL for Vercel deployment)
+// Database Schema (Turso/libSQL — SQLite-compatible, edge-ready)
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
