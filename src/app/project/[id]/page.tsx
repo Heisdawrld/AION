@@ -10,11 +10,20 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { MarkdownRenderer } from '@/components/markdown-renderer';
+import {
   AGENT_EMOJIS,
   AGENT_NAMES,
   AGENT_COLORS,
   type AgentRole,
 } from '@/lib/types/aion';
+import type { AutonomousProgressEvent } from '@/lib/engine/orchestrator';
 import {
   ArrowLeft,
   Play,
@@ -31,7 +40,23 @@ import {
   Globe,
   Github,
   Zap,
+  Eye,
+  XCircle,
+  AlertTriangle,
+  ChevronRight,
+  Package,
+  ExternalLink,
+  Shield,
+  CircleDot,
+  Rocket,
+  GitBranch,
+  MonitorCheck,
+  ArrowRight,
 } from 'lucide-react';
+
+// ============================================================
+// Data interfaces
+// ============================================================
 
 interface ProjectData {
   id: string;
@@ -67,6 +92,7 @@ interface TaskData {
 interface FileData {
   id: string;
   path: string;
+  content: string;
   createdBy: string;
   updatedAt: string;
 }
@@ -104,8 +130,26 @@ interface DeploymentData {
   platform: string;
   status: string;
   url: string | null;
+  githubRepo: string | null;
+  errors: string | null;
   deployedAt: string | null;
 }
+
+interface QAGateData {
+  gateStatus: string;
+  canDeploy: boolean;
+  buildPassed: boolean;
+  typeCheckPassed: boolean;
+  criticalBugCount: number;
+  highBugCount: number;
+  mediumBugCount: number;
+  lowBugCount: number;
+  summary: string;
+}
+
+// ============================================================
+// Status mappings
+// ============================================================
 
 const STATUS_COLORS: Record<string, string> = {
   planning: 'bg-blue-500',
@@ -124,6 +168,10 @@ const TASK_STATUS_ICONS: Record<string, React.ReactNode> = {
   failed: <AlertCircle className="w-3 h-3 text-red-500" />,
 };
 
+// ============================================================
+// Main Component
+// ============================================================
+
 export default function ProjectDashboard() {
   const params = useParams();
   const router = useRouter();
@@ -134,6 +182,19 @@ export default function ProjectDashboard() {
   const [isRunning, setIsRunning] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
   const [lastMessage, setLastMessage] = useState<string>('');
+
+  // File viewer state
+  const [viewingFile, setViewingFile] = useState<FileData | null>(null);
+  const [fileDialogOpen, setFileDialogOpen] = useState(false);
+
+  // QA Gate state
+  const [qaGate, setQaGate] = useState<QAGateData | null>(null);
+  const [qaLoading, setQaLoading] = useState(false);
+
+  // SSE streaming state
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamEvents, setStreamEvents] = useState<AutonomousProgressEvent[]>([]);
+  const [currentStreamStep, setCurrentStreamStep] = useState<{ step: number; total: number } | null>(null);
 
   const fetchProject = useCallback(async () => {
     try {
@@ -149,12 +210,31 @@ export default function ProjectDashboard() {
     }
   }, [projectId]);
 
+  const fetchQAGate = useCallback(async () => {
+    setQaLoading(true);
+    try {
+      const res = await fetch('/api/orchestrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, action: 'qa-gate' }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQaGate(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch QA gate:', error);
+    } finally {
+      setQaLoading(false);
+    }
+  }, [projectId]);
+
   useEffect(() => {
     fetchProject();
-    // Poll every 3 seconds when running
+    fetchQAGate();
     const interval = setInterval(fetchProject, 3000);
     return () => clearInterval(interval);
-  }, [fetchProject]);
+  }, [fetchProject, fetchQAGate]);
 
   const runStep = async () => {
     setIsRunning(true);
@@ -167,6 +247,7 @@ export default function ProjectDashboard() {
       const data = await res.json();
       setLastMessage(data.message || 'Step completed');
       await fetchProject();
+      await fetchQAGate();
     } catch (error: any) {
       setLastMessage(`Error: ${error.message}`);
     } finally {
@@ -174,23 +255,57 @@ export default function ProjectDashboard() {
     }
   };
 
-  const runCycle = async () => {
-    setIsRunning(true);
+  // Auto cycle with SSE streaming
+  const runCycle = useCallback(async () => {
+    setIsStreaming(true);
+    setStreamEvents([]);
+    setCurrentStreamStep(null);
+
     try {
-      const res = await fetch('/api/orchestrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, action: 'cycle', steps: 5 }),
-      });
-      const data = await res.json();
-      setLastMessage(data.message || 'Cycle completed');
-      await fetchProject();
+      const response = await fetch(`/api/orchestrate/stream?projectId=${projectId}&steps=5`);
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to connect to stream');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event: AutonomousProgressEvent = JSON.parse(line.slice(6));
+              setStreamEvents(prev => [...prev, event]);
+
+              if (event.totalSteps) {
+                setCurrentStreamStep({ step: event.stepNumber, total: event.totalSteps });
+              }
+
+              if (event.type === 'complete' || event.type === 'error') {
+                setLastMessage(event.message);
+              }
+            } catch {
+              // Ignore malformed JSON
+            }
+          }
+        }
+      }
     } catch (error: any) {
-      setLastMessage(`Error: ${error.message}`);
+      setLastMessage(`Stream error: ${error.message}`);
     } finally {
-      setIsRunning(false);
+      setIsStreaming(false);
+      await fetchProject();
+      await fetchQAGate();
     }
-  };
+  }, [projectId, fetchProject, fetchQAGate]);
 
   const runBuild = async () => {
     setIsBuilding(true);
@@ -203,12 +318,22 @@ export default function ProjectDashboard() {
       const data = await res.json();
       setLastMessage(data.message || 'Build completed');
       await fetchProject();
+      await fetchQAGate();
     } catch (error: any) {
       setLastMessage(`Error: ${error.message}`);
     } finally {
       setIsBuilding(false);
     }
   };
+
+  const handleFileClick = (file: FileData) => {
+    setViewingFile(file);
+    setFileDialogOpen(true);
+  };
+
+  // ============================================================
+  // Loading / Not Found states
+  // ============================================================
 
   if (isLoading) {
     return (
@@ -239,6 +364,152 @@ export default function ProjectDashboard() {
   const totalTasks = project.tasks.length;
   const progressPercent = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
 
+  // ============================================================
+  // QA Gate status helpers
+  // ============================================================
+
+  const getGateStatusDisplay = () => {
+    if (!qaGate || qaGate.gateStatus === 'not_run') {
+      return {
+        icon: <CircleDot className="w-5 h-5 text-gray-400" />,
+        label: 'Not Run',
+        color: 'text-gray-500',
+        bg: 'bg-gray-50 dark:bg-gray-900/30',
+        border: 'border-gray-200 dark:border-gray-800',
+      };
+    }
+    switch (qaGate.gateStatus) {
+      case 'pass':
+        return {
+          icon: <CheckCircle2 className="w-5 h-5 text-emerald-500" />,
+          label: 'PASS',
+          color: 'text-emerald-600 dark:text-emerald-400',
+          bg: 'bg-emerald-50 dark:bg-emerald-950/30',
+          border: 'border-emerald-200 dark:border-emerald-800',
+        };
+      case 'conditional_pass':
+        return {
+          icon: <AlertTriangle className="w-5 h-5 text-yellow-500" />,
+          label: 'CONDITIONAL PASS',
+          color: 'text-yellow-600 dark:text-yellow-400',
+          bg: 'bg-yellow-50 dark:bg-yellow-950/30',
+          border: 'border-yellow-200 dark:border-yellow-800',
+        };
+      case 'fail':
+        return {
+          icon: <XCircle className="w-5 h-5 text-red-500" />,
+          label: 'FAIL',
+          color: 'text-red-600 dark:text-red-400',
+          bg: 'bg-red-50 dark:bg-red-950/30',
+          border: 'border-red-200 dark:border-red-800',
+        };
+      default:
+        return {
+          icon: <CircleDot className="w-5 h-5 text-gray-400" />,
+          label: 'Unknown',
+          color: 'text-gray-500',
+          bg: 'bg-gray-50 dark:bg-gray-900/30',
+          border: 'border-gray-200 dark:border-gray-800',
+        };
+    }
+  };
+
+  const gateDisplay = getGateStatusDisplay();
+
+  // ============================================================
+  // Deployment pipeline helpers
+  // ============================================================
+
+  const getDeploymentStatusIcon = (status: string) => {
+    switch (status) {
+      case 'deployed': return <CheckCircle2 className="w-4 h-4 text-emerald-500" />;
+      case 'failed': return <XCircle className="w-4 h-4 text-red-500" />;
+      case 'building': return <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />;
+      default: return <Clock className="w-4 h-4 text-gray-400" />;
+    }
+  };
+
+  // Pipeline step status
+  const getPipelineSteps = (deployment: DeploymentData) => {
+    const steps = [
+      { name: 'Build', icon: <Hammer className="w-3.5 h-3.5" />, status: 'pending' as string },
+      { name: 'Git Push', icon: <GitBranch className="w-3.5 h-3.5" />, status: 'pending' as string },
+      { name: 'Deploy', icon: <Rocket className="w-3.5 h-3.5" />, status: 'pending' as string },
+      { name: 'URL Test', icon: <MonitorCheck className="w-3.5 h-3.5" />, status: 'pending' as string },
+    ];
+
+    if (deployment.status === 'failed') {
+      // Mark build as failed, others as skipped
+      steps[0].status = 'failed';
+      steps[1].status = 'skipped';
+      steps[2].status = 'skipped';
+      steps[3].status = 'skipped';
+    } else if (deployment.status === 'building') {
+      steps[0].status = 'done';
+      steps[1].status = 'in_progress';
+      steps[2].status = 'pending';
+      steps[3].status = 'pending';
+    } else if (deployment.status === 'deployed') {
+      if (deployment.url) {
+        steps.forEach(s => s.status = 'done');
+      } else {
+        steps[0].status = 'done';
+        steps[1].status = 'done';
+        steps[2].status = 'done';
+        steps[3].status = 'pending';
+      }
+    }
+
+    return steps;
+  };
+
+  // ============================================================
+  // Agent status helpers
+  // ============================================================
+
+  const getAgentStatus = (role: AgentRole) => {
+    const inProgressTask = project.tasks.find(t => t.assignedTo === role && t.status === 'in_progress');
+    const recentLog = project.agentLogs.find(l => l.agentRole === role);
+    const lastActivity = recentLog?.createdAt;
+    const confidence = recentLog?.confidence ?? null;
+
+    let status: 'idle' | 'working' | 'done' = 'idle';
+    if (inProgressTask) {
+      status = 'working';
+    } else if (project.tasks.some(t => t.assignedTo === role && t.status === 'done')) {
+      status = 'done';
+    }
+
+    return {
+      status,
+      currentTask: inProgressTask?.description || null,
+      lastActivity,
+      confidence,
+      lastAction: recentLog?.action || null,
+    };
+  };
+
+  // ============================================================
+  // SSE Progress icon
+  // ============================================================
+
+  const getProgressIcon = (type: string) => {
+    switch (type) {
+      case 'step_start': return <Loader2 className="w-3 h-3 animate-spin text-amber-500" />;
+      case 'step_complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
+      case 'phase_change': return <ArrowRight className="w-3 h-3 text-blue-500" />;
+      case 'stuck_detected': return <AlertTriangle className="w-3 h-3 text-yellow-500" />;
+      case 'deps_installing': return <Package className="w-3 h-3 text-purple-500" />;
+      case 'complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
+      case 'error': return <AlertCircle className="w-3 h-3 text-red-500" />;
+      default: return <Activity className="w-3 h-3" />;
+    }
+  };
+
+  // ============================================================
+  // Render
+  // ============================================================
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -263,6 +534,7 @@ export default function ProjectDashboard() {
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             {project.liveUrl && (
               <a href={project.liveUrl} target="_blank" rel="noopener noreferrer">
                 <Button variant="outline" size="sm" className="gap-1">
@@ -282,7 +554,7 @@ export default function ProjectDashboard() {
               variant="outline"
               className="gap-1"
               onClick={runStep}
-              disabled={isRunning || project.status === 'live'}
+              disabled={isRunning || isStreaming || project.status === 'live'}
             >
               {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
               Step
@@ -290,11 +562,11 @@ export default function ProjectDashboard() {
             <Button
               size="sm"
               variant="outline"
-              className="gap-1"
+              className="gap-1 border-amber-500/30 text-amber-600 dark:text-amber-400"
               onClick={runCycle}
-              disabled={isRunning || project.status === 'live'}
+              disabled={isRunning || isStreaming || project.status === 'live'}
             >
-              {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <FastForward className="w-3 h-3" />}
+              {isStreaming ? <Loader2 className="w-3 h-3 animate-spin" /> : <FastForward className="w-3 h-3" />}
               Auto (5 steps)
             </Button>
             <Button
@@ -306,7 +578,7 @@ export default function ProjectDashboard() {
               {isBuilding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Hammer className="w-3 h-3" />}
               Build
             </Button>
-            <Button variant="ghost" size="icon" onClick={fetchProject}>
+            <Button variant="ghost" size="icon" onClick={() => { fetchProject(); fetchQAGate(); }}>
               <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
@@ -325,12 +597,138 @@ export default function ProjectDashboard() {
             <Zap className="w-3 h-3 text-amber-500" /> {lastMessage}
           </p>
         )}
+        {/* SSE Streaming Progress */}
+        {isStreaming && streamEvents.length > 0 && (
+          <Card className="mt-3 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Autonomous Cycle Running</span>
+                {currentStreamStep && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    Step {currentStreamStep.step}/{currentStreamStep.total}
+                  </Badge>
+                )}
+              </div>
+              {currentStreamStep && (
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-500"
+                    style={{ width: `${(currentStreamStep.step / currentStreamStep.total) * 100}%` }}
+                  />
+                </div>
+              )}
+              <ScrollArea className="max-h-24">
+                <div className="space-y-0.5">
+                  {streamEvents.slice(-6).map((event, i) => (
+                    <div key={i} className="flex items-start gap-2 text-[11px]">
+                      <span className="mt-0.5 shrink-0">{getProgressIcon(event.type)}</span>
+                      <span className={
+                        event.type === 'error' ? 'text-red-500' :
+                        event.type === 'stuck_detected' ? 'text-yellow-600 dark:text-yellow-400' :
+                        event.type === 'complete' ? 'text-emerald-500 font-medium' :
+                        'text-muted-foreground'
+                      }>
+                        {event.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* QA Gate Status Panel */}
+      <div className="max-w-7xl mx-auto px-4 pb-3">
+        <Card className={`${gateDisplay.bg} ${gateDisplay.border} border`}>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Shield className={`w-5 h-5 ${gateDisplay.color}`} />
+                <span className={`text-sm font-bold ${gateDisplay.color}`}>
+                  QA Gate: {gateDisplay.label}
+                </span>
+              </div>
+              <Separator orientation="vertical" className="h-8" />
+              <div className="flex items-center gap-4 flex-1">
+                {/* Build Status */}
+                <div className="flex items-center gap-1.5">
+                  {qaGate?.buildPassed ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                  ) : qaGate?.buildPassed === false ? (
+                    <XCircle className="w-4 h-4 text-red-500" />
+                  ) : (
+                    <CircleDot className="w-4 h-4 text-gray-400" />
+                  )}
+                  <span className="text-xs font-medium">Build</span>
+                </div>
+                {/* TypeCheck Status */}
+                <div className="flex items-center gap-1.5">
+                  {qaGate?.typeCheckPassed ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                  ) : qaGate?.typeCheckPassed === false ? (
+                    <XCircle className="w-4 h-4 text-red-500" />
+                  ) : (
+                    <CircleDot className="w-4 h-4 text-gray-400" />
+                  )}
+                  <span className="text-xs font-medium">TypeCheck</span>
+                </div>
+                {/* Deployable */}
+                <div className="flex items-center gap-1.5">
+                  {qaGate?.canDeploy ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                  ) : qaGate ? (
+                    <XCircle className="w-4 h-4 text-red-500" />
+                  ) : (
+                    <CircleDot className="w-4 h-4 text-gray-400" />
+                  )}
+                  <span className="text-xs font-medium">Can Deploy</span>
+                </div>
+              </div>
+              {/* Bug counts */}
+              {(qaGate && qaGate.gateStatus !== 'not_run') && (
+                <div className="flex items-center gap-3">
+                  {qaGate.criticalBugCount > 0 && (
+                    <Badge variant="destructive" className="text-[10px] gap-1">
+                      <BugIcon className="w-2.5 h-2.5" /> {qaGate.criticalBugCount} critical
+                    </Badge>
+                  )}
+                  {qaGate.highBugCount > 0 && (
+                    <Badge variant="secondary" className="text-[10px] gap-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                      <BugIcon className="w-2.5 h-2.5" /> {qaGate.highBugCount} high
+                    </Badge>
+                  )}
+                  {qaGate.mediumBugCount > 0 && (
+                    <Badge variant="secondary" className="text-[10px] gap-1 bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+                      <BugIcon className="w-2.5 h-2.5" /> {qaGate.mediumBugCount} medium
+                    </Badge>
+                  )}
+                  {qaGate.lowBugCount > 0 && (
+                    <Badge variant="secondary" className="text-[10px] gap-1">
+                      <BugIcon className="w-2.5 h-2.5" /> {qaGate.lowBugCount} low
+                    </Badge>
+                  )}
+                  {qaGate.criticalBugCount === 0 && qaGate.highBugCount === 0 && qaGate.mediumBugCount === 0 && qaGate.lowBugCount === 0 && (
+                    <Badge variant="secondary" className="text-[10px] gap-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                      <CheckCircle2 className="w-2.5 h-2.5" /> No bugs
+                    </Badge>
+                  )}
+                </div>
+              )}
+              {qaGate?.summary && (
+                <span className="text-[10px] text-muted-foreground max-w-xs truncate">{qaGate.summary}</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 pb-8">
         <Tabs defaultValue="tasks" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="tasks" className="gap-1">
               <Activity className="w-3 h-3" /> Tasks
             </TabsTrigger>
@@ -343,12 +741,15 @@ export default function ProjectDashboard() {
             <TabsTrigger value="agents" className="gap-1">
               <Zap className="w-3 h-3" /> Agents
             </TabsTrigger>
+            <TabsTrigger value="deployments" className="gap-1">
+              <Rocket className="w-3 h-3" /> Deploy
+            </TabsTrigger>
             <TabsTrigger value="prd" className="gap-1">
               📋 PRD
             </TabsTrigger>
           </TabsList>
 
-          {/* Tasks Tab */}
+          {/* ====== Tasks Tab ====== */}
           <TabsContent value="tasks">
             <div className="space-y-3 mt-4">
               {project.tasks.length === 0 ? (
@@ -398,7 +799,7 @@ export default function ProjectDashboard() {
             </div>
           </TabsContent>
 
-          {/* Files Tab */}
+          {/* ====== Files Tab (with content viewer) ====== */}
           <TabsContent value="files">
             <div className="space-y-2 mt-4">
               {project.files.length === 0 ? (
@@ -409,13 +810,28 @@ export default function ProjectDashboard() {
                 </Card>
               ) : (
                 project.files.map(file => (
-                  <Card key={file.id}>
+                  <Card
+                    key={file.id}
+                    className="overflow-hidden cursor-pointer hover:border-amber-500/50 transition-colors"
+                    onClick={() => handleFileClick(file)}
+                  >
                     <CardContent className="p-3 flex items-center gap-2">
                       <FileCode className="w-4 h-4 text-muted-foreground shrink-0" />
                       <span className="text-sm font-mono flex-1">{file.path}</span>
                       <Badge variant="outline" className="text-[10px]">
                         {AGENT_EMOJIS[file.createdBy as AgentRole]} {file.createdBy}
                       </Badge>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFileClick(file);
+                        }}
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </Button>
                     </CardContent>
                   </Card>
                 ))
@@ -423,7 +839,7 @@ export default function ProjectDashboard() {
             </div>
           </TabsContent>
 
-          {/* Bugs Tab */}
+          {/* ====== Bugs Tab ====== */}
           <TabsContent value="bugs">
             <div className="space-y-2 mt-4">
               {project.bugs.length === 0 ? (
@@ -434,7 +850,7 @@ export default function ProjectDashboard() {
                 </Card>
               ) : (
                 project.bugs.map(bug => (
-                  <Card key={bug.id} className={bug.status === 'open' ? 'border-red-200' : ''}>
+                  <Card key={bug.id} className={bug.status === 'open' ? 'border-red-200 dark:border-red-800/50' : ''}>
                     <CardContent className="p-3">
                       <div className="flex items-start gap-2">
                         <BugIcon className={`w-4 h-4 mt-0.5 shrink-0 ${bug.status === 'open' ? 'text-red-500' : 'text-emerald-500'}`} />
@@ -465,7 +881,7 @@ export default function ProjectDashboard() {
             </div>
           </TabsContent>
 
-          {/* Agents Tab */}
+          {/* ====== Agents Tab (Enhanced) ====== */}
           <TabsContent value="agents">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
               {(['cto', 'business', 'frontend', 'backend', 'qa', 'devops'] as AgentRole[]).map(role => {
@@ -473,9 +889,14 @@ export default function ProjectDashboard() {
                 const lastLog = agentLogs[0];
                 const agentTasks = project.tasks.filter(t => t.assignedTo === role);
                 const doneTasks = agentTasks.filter(t => t.status === 'done').length;
+                const agentState = getAgentStatus(role);
 
                 return (
-                  <Card key={role}>
+                  <Card key={role} className={`overflow-hidden ${
+                    agentState.status === 'working'
+                      ? 'border-amber-500/50 ring-1 ring-amber-500/20'
+                      : ''
+                  }`}>
                     <CardHeader className="pb-2">
                       <div className="flex items-center gap-2">
                         <div
@@ -484,8 +905,24 @@ export default function ProjectDashboard() {
                         >
                           {AGENT_EMOJIS[role]}
                         </div>
-                        <div>
-                          <CardTitle className="text-sm">{AGENT_NAMES[role]}</CardTitle>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <CardTitle className="text-sm">{AGENT_NAMES[role]}</CardTitle>
+                            {/* Status indicator */}
+                            {agentState.status === 'working' ? (
+                              <Badge className="text-[8px] px-1.5 py-0 bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30">
+                                <Loader2 className="w-2.5 h-2.5 mr-0.5 animate-spin" /> Working
+                              </Badge>
+                            ) : agentState.status === 'done' ? (
+                              <Badge variant="secondary" className="text-[8px] px-1.5 py-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" /> Done
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[8px] px-1.5 py-0">
+                                Idle
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-[10px] text-muted-foreground">
                             {doneTasks}/{agentTasks.length} tasks • {agentLogs.length} actions
                           </p>
@@ -493,25 +930,42 @@ export default function ProjectDashboard() {
                       </div>
                     </CardHeader>
                     <CardContent className="pt-0">
+                      {/* Current task (if working) */}
+                      {agentState.currentTask && (
+                        <div className="mb-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/30">
+                          <div className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mb-0.5">Current Task</div>
+                          <div className="text-xs text-muted-foreground line-clamp-2">{agentState.currentTask}</div>
+                        </div>
+                      )}
+
+                      {/* Last action */}
                       {lastLog ? (
                         <div className="text-xs text-muted-foreground">
-                          <p className="font-medium">{lastLog.action}</p>
-                          {lastLog.confidence !== null && (
-                            <div className="mt-1 flex items-center gap-1">
-                              <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                          <p className="font-medium line-clamp-2">{lastLog.action}</p>
+                          {/* Confidence bar */}
+                          {agentState.confidence !== null && (
+                            <div className="mt-1.5 flex items-center gap-1">
+                              <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
                                 <div
-                                  className="h-full rounded-full"
+                                  className="h-full rounded-full transition-all"
                                   style={{
-                                    width: `${(lastLog.confidence || 0) * 100}%`,
-                                    backgroundColor: AGENT_COLORS[role],
+                                    width: `${agentState.confidence * 100}%`,
+                                    backgroundColor: agentState.confidence >= 0.7
+                                      ? '#10b981'
+                                      : agentState.confidence >= 0.4
+                                        ? '#f59e0b'
+                                        : '#ef4444',
                                   }}
                                 />
                               </div>
-                              <span className="text-[10px]">{((lastLog.confidence || 0) * 100).toFixed(0)}%</span>
+                              <span className="text-[10px] font-medium">{(agentState.confidence * 100).toFixed(0)}%</span>
                             </div>
                           )}
                           <p className="mt-1 text-[10px]">
-                            {new Date(lastLog.createdAt).toLocaleTimeString()}
+                            {agentState.lastActivity
+                              ? new Date(agentState.lastActivity).toLocaleTimeString()
+                              : 'N/A'
+                            }
                           </p>
                         </div>
                       ) : (
@@ -553,7 +1007,109 @@ export default function ProjectDashboard() {
             </div>
           </TabsContent>
 
-          {/* PRD Tab */}
+          {/* ====== Deployments Tab ====== */}
+          <TabsContent value="deployments">
+            <div className="space-y-4 mt-4">
+              {project.deployments.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-muted-foreground">
+                    <Rocket className="w-8 h-8 mx-auto mb-3 text-gray-300" />
+                    <p>No deployments yet. Run DevOps to deploy the application.</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                project.deployments.map(deployment => {
+                  const pipelineSteps = getPipelineSteps(deployment);
+                  return (
+                    <Card key={deployment.id} className="overflow-hidden">
+                      <CardContent className="p-4">
+                        {/* Deployment header */}
+                        <div className="flex items-center gap-3 mb-4">
+                          {getDeploymentStatusIcon(deployment.status)}
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium capitalize">{deployment.platform}</span>
+                              <Badge
+                                variant={
+                                  deployment.status === 'deployed' ? 'default' :
+                                  deployment.status === 'failed' ? 'destructive' :
+                                  'secondary'
+                                }
+                                className="text-[10px] capitalize"
+                              >
+                                {deployment.status}
+                              </Badge>
+                            </div>
+                            {deployment.deployedAt && (
+                              <span className="text-[10px] text-muted-foreground">
+                                {new Date(deployment.deployedAt).toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                          {deployment.url && (
+                            <a href={deployment.url} target="_blank" rel="noopener noreferrer">
+                              <Button variant="outline" size="sm" className="gap-1 text-xs">
+                                <ExternalLink className="w-3 h-3" /> Open
+                              </Button>
+                            </a>
+                          )}
+                        </div>
+
+                        {/* Pipeline visualization */}
+                        <div className="flex items-center gap-1">
+                          {pipelineSteps.map((step, idx) => (
+                            <div key={step.name} className="flex items-center gap-1 flex-1">
+                              <div className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium flex-1 ${
+                                step.status === 'done'
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
+                                  : step.status === 'in_progress'
+                                    ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50'
+                                    : step.status === 'failed'
+                                      ? 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/50'
+                                      : 'bg-muted/50 text-muted-foreground border border-border'
+                              }`}>
+                                {step.status === 'done' ? (
+                                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                ) : step.status === 'in_progress' ? (
+                                  <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                ) : step.status === 'failed' ? (
+                                  <XCircle className="w-3 h-3 shrink-0" />
+                                ) : (
+                                  <span className="shrink-0">{step.icon}</span>
+                                )}
+                                <span className="truncate">{step.name}</span>
+                              </div>
+                              {idx < pipelineSteps.length - 1 && (
+                                <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Deployment URL */}
+                        {deployment.url && (
+                          <div className="mt-3 p-2 bg-muted/50 rounded-md flex items-center gap-2">
+                            <Globe className="w-3 h-3 text-muted-foreground shrink-0" />
+                            <span className="text-xs font-mono text-muted-foreground truncate flex-1">{deployment.url}</span>
+                          </div>
+                        )}
+
+                        {/* Errors */}
+                        {deployment.errors && (
+                          <div className="mt-3 p-2 bg-red-50 dark:bg-red-950/20 rounded-md border border-red-200 dark:border-red-800/50">
+                            <div className="text-[10px] text-red-600 dark:text-red-400 font-medium mb-1">Errors</div>
+                            <div className="text-xs text-red-500 dark:text-red-300 font-mono line-clamp-3">{deployment.errors}</div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </div>
+          </TabsContent>
+
+          {/* ====== PRD Tab ====== */}
           <TabsContent value="prd">
             <div className="mt-4">
               {project.prd ? (
@@ -625,6 +1181,37 @@ export default function ProjectDashboard() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* ====== File Content Viewer Dialog ====== */}
+      <Dialog open={fileDialogOpen} onOpenChange={setFileDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] p-0">
+          <DialogHeader className="p-4 pb-0">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <FileCode className="w-4 h-4 text-muted-foreground" />
+              <span className="font-mono">{viewingFile?.path}</span>
+              {viewingFile && (
+                <Badge variant="outline" className="text-[10px] ml-2">
+                  {AGENT_EMOJIS[viewingFile.createdBy as AgentRole]} {viewingFile.createdBy}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-4 pt-2">
+            {viewingFile?.content ? (
+              <ScrollArea className="h-[65vh]">
+                <pre className="text-xs font-mono leading-relaxed p-4 bg-muted/50 rounded-lg border border-border overflow-x-auto whitespace-pre-wrap break-words">
+                  <code>{viewingFile.content}</code>
+                </pre>
+              </ScrollArea>
+            ) : (
+              <div className="py-12 text-center text-muted-foreground">
+                <FileCode className="w-8 h-8 mx-auto mb-3 text-gray-300" />
+                <p className="text-sm">No content available for this file.</p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

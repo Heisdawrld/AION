@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { MarkdownRenderer } from '@/components/markdown-renderer';
 import {
   AGENT_EMOJIS,
   AGENT_NAMES,
@@ -14,18 +16,22 @@ import {
   type ChatMessage,
   type AgentActivity,
 } from '@/lib/types/aion';
+import type { AutonomousProgressEvent } from '@/lib/engine/orchestrator';
 import {
   Send,
   Zap,
   Loader2,
   Sparkles,
-  ArrowRight,
   LayoutDashboard,
   FastForward,
   CheckCircle2,
   AlertCircle,
   MessageSquare,
   Activity,
+  Eye,
+  ArrowRight,
+  AlertTriangle,
+  Package,
 } from 'lucide-react';
 
 const AGENT_DESCRIPTIONS: Record<AgentRole, string> = {
@@ -47,11 +53,17 @@ export default function AIONHome() {
   const [projectStatus, setProjectStatus] = useState<string>('idle');
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // SSE progress state
+  const [sseProgress, setSseProgress] = useState<AutonomousProgressEvent[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [currentStep, setCurrentStep] = useState<{ step: number; total: number } | null>(null);
+  const [currentAgent, setCurrentAgent] = useState<AgentRole | null>(null);
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, agentActivities]);
+  }, [messages, agentActivities, sseProgress]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -84,12 +96,10 @@ export default function AIONHome() {
 
       const data = await response.json();
 
-      // Update project ID
       if (data.projectId && !projectId) {
         setProjectId(data.projectId);
       }
 
-      // Add agent responses as messages
       if (data.agentResponses) {
         for (const agentResp of data.agentResponses) {
           const agentMsg: ChatMessage = {
@@ -109,7 +119,6 @@ export default function AIONHome() {
           };
           setMessages(prev => [...prev, agentMsg]);
 
-          // Track agent activity
           const activity: AgentActivity = {
             id: crypto.randomUUID(),
             agentRole: agentResp.agentId,
@@ -146,7 +155,6 @@ export default function AIONHome() {
   const handleContinue = async () => {
     if (!projectId || isLoading) return;
 
-    // Use the chat API with a "continue" message for conversational flow
     setIsLoading(true);
     setProjectStatus('processing');
 
@@ -215,87 +223,124 @@ export default function AIONHome() {
     }
   };
 
-  const handleAutoBuild = async () => {
-    if (!projectId || isLoading) return;
+  // Auto Build with SSE streaming
+  const handleAutoBuild = useCallback(async () => {
+    if (!projectId || isStreaming) return;
 
-    setIsLoading(true);
-    setProjectStatus('processing');
+    setIsStreaming(true);
+    setSseProgress([]);
+    setCurrentStep(null);
+    setCurrentAgent(null);
 
     try {
-      const response = await fetch('/api/orchestrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId,
-          action: 'cycle',
-          steps: 3,
-        }),
-      });
+      const response = await fetch(`/api/orchestrate/stream?projectId=${projectId}&steps=5`);
 
-      const data = await response.json();
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to connect to stream');
+      }
 
-      if (data.agentResponses) {
-        for (const agentResp of data.agentResponses) {
-          const agentMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: agentResp.statusUpdate || agentResp.analysis || 'Processing...',
-            agentRole: agentResp.agentId,
-            agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-            agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-            timestamp: new Date().toISOString(),
-            projectId,
-            metadata: {
-              confidence: agentResp.confidence,
-              taskAssignments: agentResp.taskAssignments,
-            },
-          };
-          setMessages(prev => [...prev, agentMsg]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-          setAgentActivities(prev => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              agentRole: agentResp.agentId,
-              agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-              agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-              action: agentResp.statusUpdate || 'Completed task',
-              timestamp: new Date().toISOString(),
-              confidence: agentResp.confidence,
-              status: agentResp.status === 'success' ? 'success' : 'failed',
-            },
-          ]);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process SSE events from buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event: AutonomousProgressEvent = JSON.parse(line.slice(6));
+              setSseProgress(prev => [...prev, event]);
+
+              // Update current step/agent
+              if (event.totalSteps) {
+                setCurrentStep({ step: event.stepNumber, total: event.totalSteps });
+              }
+              if (event.agentRole) {
+                setCurrentAgent(event.agentRole);
+              }
+
+              // On completion, add a summary message
+              if (event.type === 'complete') {
+                const liveUrl = event.data?.liveUrl;
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    content: liveUrl
+                      ? `🚀 **Autonomous build complete!** Project is LIVE at ${liveUrl}`
+                      : `✅ **Autonomous build cycle complete.** ${event.message}`,
+                    agentRole: 'cto',
+                    agentName: 'AION',
+                    agentEmoji: '⚡',
+                    timestamp: new Date().toISOString(),
+                    projectId,
+                  },
+                ]);
+
+                if (event.data?.projectStatus) {
+                  setProjectStatus(event.data.projectStatus);
+                }
+              }
+
+              if (event.type === 'error') {
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    content: `❌ **Build error:** ${event.message}`,
+                    agentRole: 'cto',
+                    agentName: 'AION',
+                    agentEmoji: '⚡',
+                    timestamp: new Date().toISOString(),
+                  },
+                ]);
+              }
+            } catch {
+              // Ignore malformed JSON
+            }
+          }
+          // Heartbeat lines (starting with ':') are ignored
         }
       }
-
-      if (data.message) {
-        setMessages(prev => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: data.message,
-            agentRole: 'cto',
-            agentName: 'AION',
-            agentEmoji: '⚡',
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-      }
-
-      setProjectStatus(data.projectStatus || 'processing');
     } catch (error: any) {
       setMessages(prev => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `❌ Error: ${error.message}`,
+          content: `❌ **Stream error:** ${error.message}`,
+          agentRole: 'cto',
+          agentName: 'AION',
+          agentEmoji: '⚡',
           timestamp: new Date().toISOString(),
         },
       ]);
     } finally {
-      setIsLoading(false);
+      setIsStreaming(false);
+    }
+  }, [projectId, isStreaming]);
+
+  // Get the icon for an SSE progress event type
+  const getProgressIcon = (type: string) => {
+    switch (type) {
+      case 'step_start': return <Loader2 className="w-3 h-3 animate-spin text-amber-500" />;
+      case 'step_complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
+      case 'phase_change': return <ArrowRight className="w-3 h-3 text-blue-500" />;
+      case 'stuck_detected': return <AlertTriangle className="w-3 h-3 text-yellow-500" />;
+      case 'deps_installing': return <Package className="w-3 h-3 text-purple-500" />;
+      case 'complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
+      case 'error': return <AlertCircle className="w-3 h-3 text-red-500" />;
+      default: return <Activity className="w-3 h-3" />;
     }
   };
 
@@ -314,6 +359,7 @@ export default function AIONHome() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Badge variant={projectStatus === 'live' ? 'default' : 'secondary'} className="text-xs">
               {projectStatus === 'idle' ? 'Ready' : projectStatus === 'live' ? '🟢 Live' : `⚡ ${projectStatus}`}
             </Badge>
@@ -434,7 +480,11 @@ export default function AIONHome() {
                           )}
                         </div>
                       )}
-                      <div className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                      {msg.role === 'user' ? (
+                        <div className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                      ) : (
+                        <MarkdownRenderer content={msg.content} />
+                      )}
                       {msg.metadata?.taskAssignments && msg.metadata.taskAssignments.length > 0 && (
                         <div className="mt-3 pt-2 border-t border-border/50 space-y-1.5">
                           <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Task Assignments</div>
@@ -452,7 +502,60 @@ export default function AIONHome() {
                   </div>
                 ))}
 
-                {isLoading && (
+                {/* SSE Real-time Progress Panel */}
+                {isStreaming && sseProgress.length > 0 && (
+                  <div className="flex gap-3 justify-start">
+                    <div className="w-9 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                      <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+                    </div>
+                    <div className="bg-card border border-amber-500/20 rounded-2xl px-4 py-3 max-w-[80%]">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Sparkles className="w-3 h-3 animate-pulse text-amber-500" />
+                        <span className="text-xs font-semibold text-amber-500">Auto Build in Progress</span>
+                        {currentStep && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                            {currentStep.step}/{currentStep.total} steps
+                          </Badge>
+                        )}
+                        {currentAgent && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                            {AGENT_EMOJIS[currentAgent]} {AGENT_NAMES[currentAgent]}
+                          </Badge>
+                        )}
+                      </div>
+                      {/* Progress bar */}
+                      {currentStep && (
+                        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden mb-2">
+                          <div
+                            className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-500"
+                            style={{ width: `${(currentStep.step / currentStep.total) * 100}%` }}
+                          />
+                        </div>
+                      )}
+                      {/* Progress events */}
+                      <ScrollArea className="max-h-40">
+                        <div className="space-y-1">
+                          {sseProgress.slice(-8).map((event, i) => (
+                            <div key={i} className="flex items-start gap-2 text-xs">
+                              <span className="mt-0.5 shrink-0">{getProgressIcon(event.type)}</span>
+                              <span className={
+                                event.type === 'error' ? 'text-red-500' :
+                                event.type === 'stuck_detected' ? 'text-yellow-600 dark:text-yellow-400' :
+                                event.type === 'complete' ? 'text-emerald-500 font-medium' :
+                                'text-muted-foreground'
+                              }>
+                                {event.message}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </div>
+                  </div>
+                )}
+
+                {/* Loading indicator (non-SSE) */}
+                {isLoading && !isStreaming && (
                   <div className="flex gap-3 justify-start">
                     <div className="w-9 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center">
                       <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
@@ -484,17 +587,17 @@ export default function AIONHome() {
                       : 'Describe the app you want to build...'
                   }
                   className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/50 placeholder:text-muted-foreground"
-                  disabled={isLoading}
+                  disabled={isLoading || isStreaming}
                 />
                 <Button
                   onClick={handleSend}
-                  disabled={isLoading || !input.trim()}
+                  disabled={isLoading || isStreaming || !input.trim()}
                   className="rounded-xl px-4 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white"
                 >
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
-              {projectId && !isLoading && (
+              {projectId && !isLoading && !isStreaming && (
                 <div className="flex gap-2 mt-2">
                   <Button
                     onClick={handleContinue}
@@ -508,9 +611,9 @@ export default function AIONHome() {
                     onClick={handleAutoBuild}
                     variant="outline"
                     size="sm"
-                    className="rounded-lg gap-1 text-xs"
+                    className="rounded-lg gap-1 text-xs border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
                   >
-                    <FastForward className="w-3 h-3" /> Auto Build (3 steps)
+                    <FastForward className="w-3 h-3" /> Auto Build (5 steps)
                   </Button>
                   <Button
                     onClick={() => router.push(`/project/${projectId}`)}
