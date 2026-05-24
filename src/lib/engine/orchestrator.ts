@@ -2,6 +2,7 @@
 // The autonomous loop that drives agent execution
 // This is the HEART of AION — now with real file system integration
 
+import { db } from '@/lib/db';
 import { boardManager } from './board-manager';
 import { workspaceManager } from './workspace-manager';
 import { commandRunner } from './command-runner';
@@ -79,6 +80,16 @@ Remember:
     output: bizResponse.output,
   });
 
+  // Save business agent's activity as a conversation message (so user sees it)
+  if (bizResponse.output.statusUpdate || bizResponse.output.analysis) {
+    await boardManager.saveConversationMessage(projectId, {
+      role: 'system',
+      content: bizResponse.output.statusUpdate || bizResponse.output.analysis || 'Business Strategist completed PRD analysis.',
+      agentRole: 'business',
+      metadata: { confidence: bizResponse.confidence },
+    });
+  }
+
   // Save PRD to database if it was generated
   if (bizResponse.output.analysis) {
     // The AI might include the PRD in different formats
@@ -127,6 +138,19 @@ IMPORTANT: Create tasks that can be executed one at a time. Each task should pro
     confidence: ctoResponse.confidence,
     output: ctoResponse.output,
   });
+
+  // Save CTO's response as a conversation message (the main one the user sees)
+  if (ctoResponse.output.statusUpdate) {
+    await boardManager.saveConversationMessage(projectId, {
+      role: 'cto',
+      content: ctoResponse.output.statusUpdate,
+      agentRole: 'cto',
+      metadata: {
+        confidence: ctoResponse.confidence,
+        taskAssignments: ctoResponse.output.taskAssignments,
+      },
+    });
+  }
 
   // Save execution plan and create tasks
   if (ctoResponse.output.taskAssignments && ctoResponse.output.taskAssignments.length > 0) {
@@ -248,6 +272,19 @@ export async function runOrchestrationStep(projectId: string): Promise<Orchestra
       // Process the response
       const processResult = await processAgentResponse(projectId, response);
       filesWritten = processResult.filesWritten;
+
+      // Save agent activity as a conversation message (broadcasts to user)
+      if (response.output.statusUpdate) {
+        await boardManager.saveConversationMessage(projectId, {
+          role: response.agentId === 'cto' ? 'cto' : 'system',
+          content: response.output.statusUpdate,
+          agentRole: response.agentId,
+          metadata: {
+            confidence: response.confidence,
+            filesWritten: processResult.filesWritten,
+          },
+        });
+      }
 
       responses.push(response);
 
@@ -471,8 +508,9 @@ function getNextPendingTaskAction(projectId: string): NextAction {
 
 /**
  * Process an agent's response and update the board accordingly
+ * EXPORTED so the chat route can also use it
  */
-async function processAgentResponse(
+export async function processAgentResponse(
   projectId: string,
   response: AgentResponse
 ): Promise<{ filesWritten: number }> {
@@ -697,6 +735,3 @@ function getPhaseLabel(state: any): string {
     default: return '⚡ Processing';
   }
 }
-
-// Import db for test result creation
-import { db } from '@/lib/db';

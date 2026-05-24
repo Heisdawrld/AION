@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { boardManager } from '@/lib/engine/board-manager';
-import { kickoffProject, runOrchestrationStep } from '@/lib/engine/orchestrator';
+import { kickoffProject, runOrchestrationStep, processAgentResponse } from '@/lib/engine/orchestrator';
 import { LeadCTOAgent } from '@/lib/agents/lead-cto';
 
 const ctoAgent = new LeadCTOAgent();
