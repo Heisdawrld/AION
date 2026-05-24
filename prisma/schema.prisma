@@ -1,0 +1,118 @@
+// AION — Autonomous Intelligent Orchestration Network
+// Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id            String   @id @default(cuid())
+  name          String
+  description   String
+  status        String   @default("planning") // planning | building | testing | deploying | live | failed
+  prd           String?  // JSON string of PRD
+  executionPlan String?  // JSON string of ExecutionPlan
+  liveUrl       String?
+  githubRepo    String?
+  totalCycles   Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tasks       Task[]
+  files       ProjectFile[]
+  bugs        Bug[]
+  testResults TestResult[]
+  agentLogs   AgentLog[]
+  deployments Deployment[]
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  projectId   String
+  description String
+  assignedTo  String   // cto | frontend | backend | qa | devops | business
+  status      String   @default("pending") // pending | in_progress | review | done | failed
+  priority    String   @default("medium")  // critical | high | medium | low
+  phase       String   @default("build")   // discover | plan | build | test | ship
+  retryCount  Int      @default(0)
+  maxRetries  Int      @default(3)
+  output      String?  // JSON string of task output
+  feedback    String?  // Feedback from QA or Lead
+  dependsOn   String?  // JSON array of task IDs this depends on
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  completedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model ProjectFile {
+  id        String   @id @default(cuid())
+  projectId String
+  path      String
+  content   String
+  createdBy String   // Agent role that created this file
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Bug {
+  id          String    @id @default(cuid())
+  projectId   String
+  description String
+  filePath    String?
+  severity    String    @default("medium") // critical | high | medium | low
+  status      String    @default("open")   // open | assigned | fixing | resolved
+  reportedBy  String    // Agent role
+  assignedTo  String?   // Agent role
+  fixTaskId   String?   // Task ID created to fix this bug
+  resolvedAt  DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model TestResult {
+  id        String   @id @default(cuid())
+  projectId String
+  testType  String   // build | typecheck | api | url
+  passed    Boolean
+  details   String?  // Error details if failed
+  ranAt     DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model AgentLog {
+  id         String   @id @default(cuid())
+  projectId  String
+  agentRole  String   // cto | frontend | backend | qa | devops | business
+  action     String   // What the agent did
+  task       String?  // Task description
+  input      String?  // JSON string of input
+  output     String?  // JSON string of output
+  duration   Int?     // milliseconds
+  confidence Float?   // 0-1
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Deployment {
+  id         String    @id @default(cuid())
+  projectId  String
+  platform   String    @default("render")
+  status     String    @default("pending") // pending | building | deployed | failed
+  url        String?
+  githubRepo String?
+  errors     String?   // Error details if failed
+  deployedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
