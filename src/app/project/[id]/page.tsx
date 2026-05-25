@@ -275,6 +275,7 @@ export default function ProjectDashboard() {
   const [newWorkspaceRepoUrl, setNewWorkspaceRepoUrl] = useState('');
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
+  const [browserUrl, setBrowserUrl] = useState('');
 
   const fetchProject = useCallback(async () => {
     try {
@@ -468,6 +469,40 @@ export default function ProjectDashboard() {
       setLastMessage(`Git action error: ${error.message}`);
     }
   }, [fetchProject, project?.workspaces, projectId, selectedWorkspaceId]);
+
+  const queueBrowserRun = useCallback(async () => {
+    const targetUrl = browserUrl.trim();
+    const currentSelectedWorkspace =
+      project?.workspaces.find(workspace => workspace.id === selectedWorkspaceId) ||
+      project?.workspaces[0] ||
+      null;
+    if (!targetUrl) {
+      setLastMessage('Enter a URL first.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          workspaceId: currentSelectedWorkspace?.id,
+          kind: 'browser',
+          summary: `Visit URL: ${targetUrl}`,
+          command: targetUrl,
+          requestedBy: 'user',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to queue browser run');
+      setLastMessage('Browser run queued.');
+      setBrowserUrl('');
+      await fetchProject();
+    } catch (error: any) {
+      setLastMessage(`Browser run error: ${error.message}`);
+    }
+  }, [browserUrl, fetchProject, project?.workspaces, projectId, selectedWorkspaceId]);
 
   useEffect(() => {
     fetchProject();
@@ -753,9 +788,9 @@ export default function ProjectDashboard() {
   // ============================================================
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="operator-shell">
       {/* Header */}
-      <header className="border-b border-border bg-background/95 backdrop-blur sticky top-0 z-50">
+      <header className="border-b border-border/70 bg-background/82 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
@@ -970,7 +1005,7 @@ export default function ProjectDashboard() {
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 pb-8">
         <Tabs defaultValue="tasks" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
+          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-3xl border border-border/70 bg-card/70 p-2">
             <TabsTrigger value="tasks" className="gap-1">
               <Activity className="w-3 h-3" /> Tasks
             </TabsTrigger>
@@ -1323,6 +1358,20 @@ export default function ProjectDashboard() {
                           <Separator />
                         </>
                       )}
+
+                      <div className="text-xs font-medium">Browser run</div>
+                      <div className="flex gap-2">
+                        <Input
+                          value={browserUrl}
+                          onChange={(e) => setBrowserUrl(e.target.value)}
+                          placeholder="https://example.com"
+                          className="h-8 text-sm"
+                        />
+                        <Button size="sm" variant="outline" onClick={queueBrowserRun} disabled={!browserUrl.trim()}>
+                          Visit
+                        </Button>
+                      </div>
+                      <Separator />
 
                       <div className="text-xs font-medium">Create workspace</div>
                       <Input

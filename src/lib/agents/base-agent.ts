@@ -1,4 +1,4 @@
-// AION — Base Agent
+// AION - Base Agent
 // All agents inherit from this class.
 // Implements structured output parsing and anti-hallucination checks.
 
@@ -28,31 +28,21 @@ export abstract class BaseAgent {
     this.deniedAccess = config.deniedAccess;
   }
 
-  /**
-   * Execute a task. Must be implemented by each agent.
-   */
   abstract execute(task: string, context: string): Promise<AgentResponse>;
 
-  /**
-   * Call AI with the agent's system prompt + task context.
-   * Returns parsed JSON response.
-   * If JSON parsing fails, attempts to extract structured data from text.
-   */
   protected async callAgentAI<T>(userMessage: string): Promise<{ data: T | null; raw: string; duration: number }> {
     const result = await callAIForJSON<T>({
-      systemPrompt: this.systemPrompt,
+      systemPrompt: this.composeSystemPrompt(this.systemPrompt),
       userMessage,
       temperature: 0.3,
       maxTokens: 2048,
-      agentRole: this.role, // Hybrid Brain routing
+      agentRole: this.role,
     });
 
-    // If JSON parsing succeeded, return it
     if (result.data) {
       return result;
     }
 
-    // If JSON parsing failed but we have raw content, try to build a response from it
     if (result.raw && result.raw.length > 10) {
       console.log(`[AION ${this.role}] JSON parsing failed, attempting text-based extraction...`);
       const extracted = this.extractResponseFromText(result.raw);
@@ -64,12 +54,37 @@ export abstract class BaseAgent {
     return result;
   }
 
-  /**
-   * Attempt to extract a structured response from free-form text.
-   * This is a fallback when the AI doesn't return valid JSON.
-   */
+  private composeSystemPrompt(prompt: string): string {
+    const shared = [
+      'OPERATING STYLE:',
+      '1. Sound like a senior operator, not customer support.',
+      '2. Be concise, decisive, and technically specific.',
+      '3. Surface risks, tradeoffs, blockers, and recommendations plainly.',
+      '4. Do not moralize, flatter, or hedge without reason.',
+      '5. Prefer evidence, repo state, logs, and current task data over generic advice.',
+      '6. If you are a specialist, speak like you are reporting upward to the Lead CTO.',
+      '7. When uncertain, say what is unknown and what should be checked next.',
+    ].join('\n');
+
+    const roleSpecific = this.role === 'cto'
+      ? [
+          'LEAD CTO STYLE:',
+          '1. You are the single accountable voice to the user.',
+          '2. Be sharp, calm, and commercially aware.',
+          '3. Filter internal noise. Summarize the work, the decision, the risk, and the next move.',
+          '4. Push back when a plan is weak, but always replace it with a better route.',
+        ].join('\n')
+      : [
+          'SPECIALIST STYLE:',
+          '1. Report status in execution language, not theatre.',
+          '2. Tell the Lead CTO what changed, what failed, what is blocked, and what you recommend next.',
+          '3. Keep user-facing status updates short and high-signal.',
+        ].join('\n');
+
+    return `${shared}\n\n${roleSpecific}\n\n${prompt}`;
+  }
+
   private extractResponseFromText(text: string): AgentResponse | null {
-    // Try to find a JSON-like structure in the text
     const jsonMatch = text.match(/\{[\s\S]*"status"[\s\S]*\}/);
     if (jsonMatch) {
       try {
@@ -77,8 +92,6 @@ export abstract class BaseAgent {
       } catch {}
     }
 
-    // If no JSON found, build a response from the text
-    // Check if the text contains file blocks
     const files: FileChange[] = [];
     const fileBlockRegex = /(?:File|file):\s*`?([^`\n]+)`?\s*```(?:\w+)?\s*\n([\s\S]*?)```/g;
     let match;
@@ -91,7 +104,6 @@ export abstract class BaseAgent {
       });
     }
 
-    // Also try ```typescript or ```tsx blocks with filenames in comments
     const codeBlockRegex = /\/\/\s*(?:File|file|Path|path):\s*([^\n]+)\n```(?:typescript|tsx|ts|javascript|jsx|json|prisma)?\s*\n([\s\S]*?)```/g;
     while ((match = codeBlockRegex.exec(text)) !== null) {
       files.push({
@@ -102,7 +114,6 @@ export abstract class BaseAgent {
       });
     }
 
-    // Build a reasonable response
     const analysis = text.replace(/```[\s\S]*?```/g, '[code block]').substring(0, 500);
 
     return {
@@ -112,35 +123,32 @@ export abstract class BaseAgent {
       output: {
         analysis,
         files: files.length > 0 ? files : undefined,
-        statusUpdate: files.length > 0
-          ? `Generated ${files.length} file(s)`
-          : 'I generated a response but could not structure it properly. Retrying might help.',
-        nextSteps: files.length > 0
-          ? ['Run next agent task', 'Install new dependencies if any']
-          : ['Retry with simpler task'],
+        statusUpdate:
+          files.length > 0
+            ? `Prepared ${files.length} file change${files.length === 1 ? '' : 's'}.`
+            : 'I generated a response but could not structure it reliably. Retry with a tighter task.',
+        nextSteps:
+          files.length > 0
+            ? ['Review generated changes', 'Run the next execution step']
+            : ['Retry with a narrower instruction'],
       },
       confidence: files.length > 0 ? 0.7 : 0.4,
     };
   }
 
-  /**
-   * Call AI with a CUSTOM system prompt (instead of the agent's default).
-   * Used for specialized modes like CTO's conversational mode.
-   */
   protected async callAgentAIWithPrompt<T>(customSystemPrompt: string, userMessage: string): Promise<{ data: T | null; raw: string; duration: number }> {
     const result = await callAIForJSON<T>({
-      systemPrompt: customSystemPrompt,
+      systemPrompt: this.composeSystemPrompt(customSystemPrompt),
       userMessage,
-      temperature: 0.4, // Slightly higher for conversational personality
+      temperature: 0.4,
       maxTokens: 2048,
-      agentRole: this.role, // Hybrid Brain routing
+      agentRole: this.role,
     });
 
     if (result.data) {
       return result;
     }
 
-    // If JSON parsing failed but we have raw content, try to extract
     if (result.raw && result.raw.length > 10) {
       console.log(`[AION ${this.role}] JSON parsing failed with custom prompt, attempting text-based extraction...`);
       const extracted = this.extractResponseFromText(result.raw);
@@ -152,17 +160,10 @@ export abstract class BaseAgent {
     return result;
   }
 
-  /**
-   * Call AI for a text response (no JSON parsing).
-   */
   protected async callAgentAIText(userMessage: string): Promise<string> {
-    return callAIForText(this.systemPrompt, userMessage);
+    return callAIForText(this.composeSystemPrompt(this.systemPrompt), userMessage);
   }
 
-  /**
-   * Validate that a file change is within this agent's write boundaries.
-   * This is a CRITICAL anti-hallucination check.
-   */
   protected validateFileAccess(files: FileChange[]): { valid: FileChange[]; violations: FileChange[] } {
     const valid: FileChange[] = [];
     const violations: FileChange[] = [];
@@ -185,28 +186,22 @@ export abstract class BaseAgent {
     return { valid, violations };
   }
 
-  /**
-   * Check if a file path is within this agent's allowed write domain.
-   */
   private isPathAllowed(path: string): boolean {
     const allowedPatterns = this.getAllowedPathPatterns();
     const deniedPatterns = this.getDeniedPathPatterns();
 
-    // Check denied first (takes priority)
     for (const pattern of deniedPatterns) {
       if (path.includes(pattern)) {
         return false;
       }
     }
 
-    // Check allowed
     for (const pattern of allowedPatterns) {
       if (path.includes(pattern)) {
         return true;
       }
     }
 
-    // Default deny if no pattern matches
     return false;
   }
 
@@ -217,7 +212,7 @@ export abstract class BaseAgent {
       case 'backend':
         return ['src/app/api/', 'prisma/', 'src/lib/server/', 'src/lib/db.ts'];
       case 'business':
-        return ['README.md', 'docs/']; // Business agent writes README and docs
+        return ['README.md', 'docs/'];
       case 'design':
         return ['src/components/', 'src/app/', 'public/', 'globals.css', 'tailwind.config.'];
       case 'data':
@@ -238,7 +233,7 @@ export abstract class BaseAgent {
       case 'qa':
       case 'devops':
       case 'research':
-        return []; // Non-code agents don't write files directly
+        return [];
       default:
         return [];
     }
@@ -255,22 +250,19 @@ export abstract class BaseAgent {
     }
   }
 
-  /**
-   * Create a standard agent response with anti-hallucination checks.
-   */
   protected createResponse(
     taskId: string,
     status: 'success' | 'failed' | 'needs_clarification',
     output: AgentResponse['output'],
     confidence: number
   ): AgentResponse {
-    // Validate file access before including in response
     if (output.files && output.files.length > 0) {
       const { valid, violations } = this.validateFileAccess(output.files);
       output.files = valid;
       if (violations.length > 0 && status === 'success') {
-        output.analysis = (output.analysis || '') +
-          `\n\n⚠️ ${violations.length} file(s) blocked due to domain boundary violation: ${violations.map(v => v.path).join(', ')}`;
+        output.analysis =
+          (output.analysis || '') +
+          `\n\nBlocked ${violations.length} file path violation${violations.length === 1 ? '' : 's'}: ${violations.map(v => v.path).join(', ')}`;
       }
     }
 
@@ -279,7 +271,7 @@ export abstract class BaseAgent {
       taskId,
       status,
       output,
-      confidence: Math.max(0, Math.min(1, confidence)), // Clamp 0-1
+      confidence: Math.max(0, Math.min(1, confidence)),
     };
   }
 }

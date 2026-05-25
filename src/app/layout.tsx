@@ -15,8 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AION — Autonomous Intelligent Orchestration Network",
-  description: "Build, test, and ship complete web apps autonomously with 6 AI agents working together.",
+  title: "AION - Lead CTO Command Center",
+  description:
+    "AION is a phone-ready CTO command center for autonomous repo execution, approvals, browser runs, and delivery control.",
   keywords: ["AION", "AI agents", "autonomous development", "multi-agent", "Next.js"],
   authors: [{ name: "AION" }],
   icons: {
@@ -24,13 +25,13 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "AION",
-    description: "Autonomous Intelligent Orchestration Network",
+    description: "Lead CTO command center",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "AION",
-    description: "Autonomous Intelligent Orchestration Network",
+    description: "Lead CTO command center",
   },
 };
 
@@ -42,7 +43,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+        className={`${geistSans.variable} ${geistMono.variable} bg-background text-foreground antialiased selection:bg-primary/20 selection:text-foreground`}
       >
         <ThemeProvider
           attribute="class"

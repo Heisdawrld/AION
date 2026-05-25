@@ -104,6 +104,77 @@ function extractBranchInfo(workspacePath) {
   }
 }
 
+function stripHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<\/?(p|div|br|h[1-6]|li|tr|hr|blockquote|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary|pre)[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n/g, '\n\n')
+    .trim();
+}
+
+function extractTitle(html, fallbackUrl) {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch?.[1]) {
+    return stripHtml(titleMatch[1]).trim();
+  }
+  return fallbackUrl;
+}
+
+function extractLinks(html, baseUrl) {
+  const links = [];
+  const seen = new Set();
+  const regex = /<a[^>]*href=["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+    try {
+      const href = new URL(match[1], baseUrl).href;
+      if (seen.has(href)) continue;
+      seen.add(href);
+      links.push({
+        href,
+        text: stripHtml(match[2]).trim() || href,
+      });
+    } catch {}
+  }
+
+  return links.slice(0, 50);
+}
+
+async function visitUrl(url) {
+  const start = Date.now();
+  const response = await fetch(url, {
+    method: 'GET',
+    redirect: 'follow',
+  });
+  const html = await response.text();
+  const title = extractTitle(html, url);
+  const text = stripHtml(html);
+  const links = extractLinks(html, url);
+
+  return {
+    success: response.ok,
+    output: truncate(text),
+    error: response.ok ? '' : `HTTP ${response.status}`,
+    duration: Date.now() - start,
+    statusCode: response.status,
+    title,
+    html: truncate(html),
+    text,
+    links,
+  };
+}
+
 async function handleRun(claimed) {
   const { run, workspace, workspacePath } = claimed;
 
@@ -111,7 +182,7 @@ async function handleRun(claimed) {
     return;
   }
 
-  if (run.kind !== 'command' && run.kind !== 'git') {
+  if (run.kind !== 'command' && run.kind !== 'git' && run.kind !== 'browser') {
     await reportRun({
       runId: run.id,
       status: 'failed',
@@ -136,15 +207,41 @@ async function handleRun(claimed) {
     resolvedCommand = resolvedCommand.replaceAll('__REPO_URL__', workspace.repoUrl);
   }
 
-  const result = runCommand(resolvedCommand, workspacePath);
+  const result = run.kind === 'browser'
+    ? await visitUrl(resolvedCommand)
+    : runCommand(resolvedCommand, workspacePath);
   const combinedLog = [
-    `$ ${resolvedCommand}`,
+    run.kind === 'browser' ? `[browser] ${resolvedCommand}` : `$ ${resolvedCommand}`,
     result.output,
     result.error ? `\n[stderr]\n${result.error}` : '',
     `\n[duration_ms] ${result.duration}`,
   ].join('\n');
 
-  const branchInfo = result.success ? extractBranchInfo(workspacePath) : null;
+  const branchInfo = result.success && run.kind !== 'browser' ? extractBranchInfo(workspacePath) : null;
+  const browserArtifacts = run.kind === 'browser'
+    ? [
+        {
+          kind: 'html',
+          title: `Browser HTML: ${result.title || resolvedCommand}`,
+          contentType: 'text/html',
+          content: result.html,
+          sizeBytes: result.html?.length || 0,
+        },
+        {
+          kind: 'json',
+          title: `Browser summary: ${result.title || resolvedCommand}`,
+          contentType: 'application/json',
+          content: JSON.stringify({
+            url: resolvedCommand,
+            title: result.title,
+            statusCode: result.statusCode,
+            linkCount: result.links?.length || 0,
+            links: result.links || [],
+          }, null, 2),
+          sizeBytes: JSON.stringify(result.links || []).length,
+        },
+      ]
+    : [];
 
   await reportRun({
     runId: run.id,
@@ -166,6 +263,7 @@ async function handleRun(claimed) {
         content: truncate(combinedLog),
         sizeBytes: combinedLog.length,
       },
+      ...browserArtifacts,
     ],
   });
 }

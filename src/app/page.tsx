@@ -1,70 +1,92 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { MarkdownRenderer } from '@/components/markdown-renderer';
 import {
+  AGENT_COLORS,
   AGENT_EMOJIS,
   AGENT_NAMES,
-  AGENT_COLORS,
+  type AgentActivity,
   type AgentRole,
   type ChatMessage,
-  type AgentActivity,
 } from '@/lib/types/aion';
 import type { AutonomousProgressEvent } from '@/lib/engine/orchestrator';
 import {
-  Send,
-  Zap,
-  Loader2,
-  Sparkles,
-  LayoutDashboard,
-  FastForward,
-  CheckCircle2,
-  AlertCircle,
-  MessageSquare,
   Activity,
-  Eye,
+  AlertCircle,
   ArrowRight,
-  AlertTriangle,
-  Package,
+  CheckCircle2,
+  FastForward,
+  LayoutDashboard,
+  Loader2,
+  MessageSquare,
+  Send,
+  Shield,
+  Sparkles,
+  Terminal,
+  Zap,
 } from 'lucide-react';
 
 const AGENT_DESCRIPTIONS: Record<AgentRole, string> = {
-  cto: 'Orchestrates the team, plans and delegates — your main point of contact',
-  frontend: 'Builds React UI, components & pages',
-  backend: 'Builds APIs, database & server logic',
-  qa: 'Tests code, catches bugs, validates quality',
-  devops: 'Deploys to GitHub & Render, tests URLs',
-  business: 'Creates PRDs, defines features & scope',
-  research: 'Searches the web, scrapes sites, gathers market intelligence',
-  security: 'Audits code for vulnerabilities, scans secrets, OWASP checks',
-  design: 'Designs UI/UX, builds design systems, ensures accessibility',
-  data: 'Optimizes databases, manages schemas, designs migrations',
-  docs: 'Auto-generates README, API docs, and guides',
-  analytics: 'Sets up tracking, dashboards, and A/B testing',
-  integration: 'Connects third-party APIs, OAuth, webhooks',
-  performance: 'Profiles performance, optimizes bundle, Core Web Vitals',
-  compliance: 'License auditing, GDPR, privacy policies, WCAG compliance',
+  cto: 'Owns the call, delegates work, and reports to you in one voice.',
+  frontend: 'Builds the interface layer and interaction system.',
+  backend: 'Owns APIs, workflows, and application logic.',
+  qa: 'Breaks weak builds, validates fixes, and guards release quality.',
+  devops: 'Controls repo, runtime, deployment, and release operations.',
+  business: 'Sharpens scope, PRD quality, and product framing.',
+  research: 'Pulls outside evidence, docs, and competitive context.',
+  security: 'Surfaces security gaps and hardens risky paths.',
+  design: 'Refines UX, hierarchy, clarity, and visual systems.',
+  data: 'Shapes schema, migrations, and storage decisions.',
+  docs: 'Keeps the system legible with README and operational docs.',
+  analytics: 'Defines metrics, instrumentation, and reporting.',
+  integration: 'Owns external services, auth, and webhooks.',
+  performance: 'Finds bottlenecks and improves runtime quality.',
+  compliance: 'Covers privacy, licensing, and policy gaps.',
 };
+
+const EXAMPLE_PROMPTS = [
+  'Build a phone-first AI CTO dashboard for my product team.',
+  'Fix onboarding in my repo, run tests, and prep a safe push.',
+  'Clone my Next.js repo, inspect auth, and tell me what is broken.',
+  'Open staging, investigate checkout, and report back with screenshots.',
+];
+
+function getProgressIcon(type: string) {
+  switch (type) {
+    case 'step_start':
+      return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
+    case 'step_complete':
+      return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
+    case 'phase_change':
+      return <ArrowRight className="h-3.5 w-3.5 text-sky-500" />;
+    case 'stuck_detected':
+      return <AlertCircle className="h-3.5 w-3.5 text-amber-500" />;
+    case 'complete':
+      return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
+    default:
+      return <Activity className="h-3.5 w-3.5 text-muted-foreground" />;
+  }
+}
 
 export default function AIONHome() {
   const router = useRouter();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [agentActivities, setAgentActivities] = useState<AgentActivity[]>([]);
-  const [projectStatus, setProjectStatus] = useState<string>('idle');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // SSE progress state
-  const [sseProgress, setSseProgress] = useState<AutonomousProgressEvent[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectStatus, setProjectStatus] = useState('idle');
+  const [agentActivities, setAgentActivities] = useState<AgentActivity[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [sseProgress, setSseProgress] = useState<AutonomousProgressEvent[]>([]);
   const [currentStep, setCurrentStep] = useState<{ step: number; total: number } | null>(null);
   const [currentAgent, setCurrentAgent] = useState<AgentRole | null>(null);
 
@@ -74,37 +96,71 @@ export default function AIONHome() {
     }
   }, [messages, agentActivities, sseProgress]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  const appendAgentResponses = useCallback((data: any) => {
+    if (!data.agentResponses) return;
 
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: input.trim(),
-      timestamp: new Date().toISOString(),
-    };
+    for (const agentResp of data.agentResponses) {
+      const role = agentResp.agentId as AgentRole;
+      setMessages(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: agentResp.statusUpdate || agentResp.analysis || 'Processing...',
+          agentRole: role,
+          agentName: AGENT_NAMES[role] || role,
+          agentEmoji: AGENT_EMOJIS[role] || 'AI',
+          timestamp: new Date().toISOString(),
+          projectId: data.projectId,
+          metadata: {
+            confidence: agentResp.confidence,
+            taskAssignments: agentResp.taskAssignments,
+            status: data.projectStatus,
+          },
+        },
+      ]);
 
-    setMessages(prev => [...prev, userMessage]);
+      setAgentActivities(prev => [
+        {
+          id: crypto.randomUUID(),
+          agentRole: role,
+          agentName: AGENT_NAMES[role] || role,
+          agentEmoji: AGENT_EMOJIS[role] || 'AI',
+          action: agentResp.statusUpdate || 'Updated execution state',
+          timestamp: new Date().toISOString(),
+          confidence: agentResp.confidence,
+          status: (agentResp.status === 'success' ? 'success' : 'failed') as AgentActivity['status'],
+        },
+        ...prev,
+      ].slice(0, 24));
+    }
+  }, []);
+
+  const submitMessage = useCallback(async (rawMessage: string) => {
+    const trimmed = rawMessage.trim();
+    if (!trimmed) return;
+    setMessages(prev => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: trimmed,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
     setInput('');
     setIsLoading(true);
     setProjectStatus('processing');
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const apiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
-      if (apiKey) {
-        headers['x-aion-api-key'] = apiKey;
-      }
+      if (apiKey) headers['x-aion-api-key'] = apiKey;
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          message: input.trim(),
-          projectId,
-        }),
+        body: JSON.stringify({ message: trimmed, projectId }),
       });
 
       if (!response.ok) {
@@ -113,44 +169,10 @@ export default function AIONHome() {
       }
 
       const data = await response.json();
-
       if (data.projectId && !projectId) {
         setProjectId(data.projectId);
       }
-
-      if (data.agentResponses) {
-        for (const agentResp of data.agentResponses) {
-          const agentMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: agentResp.statusUpdate || agentResp.analysis || 'Processing...',
-            agentRole: agentResp.agentId,
-            agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-            agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-            timestamp: new Date().toISOString(),
-            projectId: data.projectId,
-            metadata: {
-              confidence: agentResp.confidence,
-              taskAssignments: agentResp.taskAssignments,
-              status: data.projectStatus,
-            },
-          };
-          setMessages(prev => [...prev, agentMsg]);
-
-          const activity: AgentActivity = {
-            id: crypto.randomUUID(),
-            agentRole: agentResp.agentId,
-            agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-            agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-            action: agentResp.statusUpdate || 'Completed task',
-            timestamp: new Date().toISOString(),
-            confidence: agentResp.confidence,
-            status: agentResp.status === 'success' ? 'success' : 'failed',
-          };
-          setAgentActivities(prev => [...prev, activity]);
-        }
-      }
-
+      appendAgentResponses(data);
       setProjectStatus(data.projectStatus || 'processing');
     } catch (error: any) {
       setMessages(prev => [
@@ -158,98 +180,29 @@ export default function AIONHome() {
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `❌ Error: ${error.message || 'Something went wrong. Please try again.'}`,
+          content: `System fault: ${error.message || 'Request failed.'}`,
           agentRole: 'cto',
-          agentName: 'AION',
-          agentEmoji: '⚡',
+          agentName: 'Lead CTO',
+          agentEmoji: AGENT_EMOJIS.cto,
           timestamp: new Date().toISOString(),
         },
       ]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [appendAgentResponses, projectId]);
 
-  const handleContinue = async () => {
-    if (!projectId || isLoading) return;
+  const handleSend = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isLoading || isStreaming) return;
+    await submitMessage(trimmed);
+  }, [input, isLoading, isStreaming, submitMessage]);
 
-    setIsLoading(true);
-    setProjectStatus('processing');
+  const handleContinue = useCallback(async () => {
+    if (!projectId || isLoading || isStreaming) return;
+    await submitMessage('Continue building. What is the current call and next move?');
+  }, [isLoading, isStreaming, projectId, submitMessage]);
 
-    try {
-      const continueHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      const continueApiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
-      if (continueApiKey) {
-        continueHeaders['x-aion-api-key'] = continueApiKey;
-      }
-
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: continueHeaders,
-        body: JSON.stringify({
-          message: 'Continue building. What\'s next?',
-          projectId,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.agentResponses) {
-        for (const agentResp of data.agentResponses) {
-          const agentMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: agentResp.statusUpdate || agentResp.analysis || 'Processing...',
-            agentRole: agentResp.agentId,
-            agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-            agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-            timestamp: new Date().toISOString(),
-            projectId,
-            metadata: {
-              confidence: agentResp.confidence,
-              taskAssignments: agentResp.taskAssignments,
-            },
-          };
-          setMessages(prev => [...prev, agentMsg]);
-
-          setAgentActivities(prev => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              agentRole: agentResp.agentId,
-              agentName: AGENT_NAMES[agentResp.agentId as AgentRole] || agentResp.agentId,
-              agentEmoji: AGENT_EMOJIS[agentResp.agentId as AgentRole] || '🤖',
-              action: agentResp.statusUpdate || 'Completed task',
-              timestamp: new Date().toISOString(),
-              confidence: agentResp.confidence,
-              status: agentResp.status === 'success' ? 'success' : 'failed',
-            },
-          ]);
-        }
-      }
-
-      setProjectStatus(data.projectStatus || 'processing');
-    } catch (error: any) {
-      setMessages(prev => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: `❌ Error: ${error.message}`,
-          agentRole: 'cto',
-          agentName: 'AION',
-          agentEmoji: '⚡',
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Auto Build with SSE streaming
   const handleAutoBuild = useCallback(async () => {
     if (!projectId || isStreaming) return;
 
@@ -259,14 +212,12 @@ export default function AIONHome() {
     setCurrentAgent(null);
 
     try {
-      const streamHeaders: Record<string, string> = {};
-      const streamApiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
-      if (streamApiKey) {
-        streamHeaders['x-aion-api-key'] = streamApiKey;
-      }
+      const headers: Record<string, string> = {};
+      const apiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
+      if (apiKey) headers['x-aion-api-key'] = apiKey;
 
       const response = await fetch(`/api/orchestrate/stream?projectId=${projectId}&steps=5`, {
-        headers: streamHeaders,
+        headers,
       });
 
       if (!response.ok || !response.body) {
@@ -282,68 +233,41 @@ export default function AIONHome() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-
-        // Process SSE events from buffer
         const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: AutonomousProgressEvent = JSON.parse(line.slice(6));
-              setSseProgress(prev => [...prev, event]);
+          if (!line.startsWith('data: ')) continue;
 
-              // Update current step/agent
-              if (event.totalSteps) {
-                setCurrentStep({ step: event.stepNumber, total: event.totalSteps });
-              }
-              if (event.agentRole) {
-                setCurrentAgent(event.agentRole);
-              }
+          try {
+            const event: AutonomousProgressEvent = JSON.parse(line.slice(6));
+            setSseProgress(prev => [...prev, event]);
 
-              // On completion, add a summary message
-              if (event.type === 'complete') {
-                const liveUrl = event.data?.liveUrl;
-                setMessages(prev => [
-                  ...prev,
-                  {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: liveUrl
-                      ? `🚀 **Autonomous build complete!** Project is LIVE at ${liveUrl}`
-                      : `✅ **Autonomous build cycle complete.** ${event.message}`,
-                    agentRole: 'cto',
-                    agentName: 'AION',
-                    agentEmoji: '⚡',
-                    timestamp: new Date().toISOString(),
-                    projectId,
-                  },
-                ]);
-
-                if (event.data?.projectStatus) {
-                  setProjectStatus(event.data.projectStatus);
-                }
-              }
-
-              if (event.type === 'error') {
-                setMessages(prev => [
-                  ...prev,
-                  {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: `❌ **Build error:** ${event.message}`,
-                    agentRole: 'cto',
-                    agentName: 'AION',
-                    agentEmoji: '⚡',
-                    timestamp: new Date().toISOString(),
-                  },
-                ]);
-              }
-            } catch {
-              // Ignore malformed JSON
+            if (event.totalSteps) {
+              setCurrentStep({ step: event.stepNumber, total: event.totalSteps });
             }
-          }
-          // Heartbeat lines (starting with ':') are ignored
+            if (event.agentRole) {
+              setCurrentAgent(event.agentRole);
+            }
+
+            if (event.type === 'complete') {
+              setMessages(prev => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: event.data?.liveUrl
+                    ? `The cycle is complete. Deployment is live at ${event.data.liveUrl}.`
+                    : `The autonomous cycle completed. ${event.message}`,
+                  agentRole: 'cto',
+                  agentName: AGENT_NAMES.cto,
+                  agentEmoji: AGENT_EMOJIS.cto,
+                  timestamp: new Date().toISOString(),
+                  projectId,
+                },
+              ]);
+            }
+          } catch {}
         }
       }
     } catch (error: any) {
@@ -352,10 +276,10 @@ export default function AIONHome() {
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `❌ **Stream error:** ${error.message}`,
+          content: `Streaming failed: ${error.message}`,
           agentRole: 'cto',
-          agentName: 'AION',
-          agentEmoji: '⚡',
+          agentName: AGENT_NAMES.cto,
+          agentEmoji: AGENT_EMOJIS.cto,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -364,388 +288,340 @@ export default function AIONHome() {
     }
   }, [projectId, isStreaming]);
 
-  // Get the icon for an SSE progress event type
-  const getProgressIcon = (type: string) => {
-    switch (type) {
-      case 'step_start': return <Loader2 className="w-3 h-3 animate-spin text-amber-500" />;
-      case 'step_complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
-      case 'phase_change': return <ArrowRight className="w-3 h-3 text-blue-500" />;
-      case 'stuck_detected': return <AlertTriangle className="w-3 h-3 text-yellow-500" />;
-      case 'deps_installing': return <Package className="w-3 h-3 text-purple-500" />;
-      case 'complete': return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
-      case 'error': return <AlertCircle className="w-3 h-3 text-red-500" />;
-      default: return <Activity className="w-3 h-3" />;
-    }
-  };
+  const leadSummary = [...messages].reverse().find(message => message.agentRole === 'cto');
 
   return (
-    <div className="min-h-screen flex flex-col bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white font-bold text-sm">
-              A
+    <div className="operator-shell">
+      <div className="operator-grid pointer-events-none fixed inset-0 opacity-30" />
+
+      <header className="sticky top-0 z-50 border-b border-border/70 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-4">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-primary via-orange-500 to-amber-300 text-sm font-semibold text-white shadow-lg shadow-primary/20">
+              AI
             </div>
             <div>
-              <h1 className="text-lg font-bold tracking-tight">AION</h1>
-              <p className="text-xs text-muted-foreground">Autonomous Intelligent Orchestration Network</p>
+              <p className="operator-chip">Lead CTO Command Center</p>
+              <h1 className="mt-2 text-lg font-semibold tracking-[-0.03em] sm:text-xl">AION</h1>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs"
-              onClick={() => router.push('/dashboard')}
-            >
-              <LayoutDashboard className="w-3 h-3" /> Projects
+            <Button variant="outline" size="sm" className="rounded-full" onClick={() => router.push('/dashboard')}>
+              <LayoutDashboard className="mr-2 h-4 w-4" />
+              Dashboard
             </Button>
-            <Badge variant={projectStatus === 'live' ? 'default' : 'secondary'} className="text-xs">
-              {projectStatus === 'idle' ? 'Ready' : projectStatus === 'live' ? '🟢 Live' : `⚡ ${projectStatus}`}
-            </Badge>
             {projectId && (
-              <>
-                <Badge variant="outline" className="text-xs font-mono">
-                  {projectId.substring(0, 8)}
-                </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1 text-xs"
-                  onClick={() => router.push(`/project/${projectId}`)}
-                >
-                  <LayoutDashboard className="w-3 h-3" /> Dashboard
-                </Button>
-              </>
+              <Button size="sm" className="rounded-full" onClick={() => router.push(`/project/${projectId}`)}>
+                <Terminal className="mr-2 h-4 w-4" />
+                War Room
+              </Button>
             )}
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 flex max-w-7xl w-full mx-auto">
-        {/* Chat Area */}
-        <div className="flex-1 flex flex-col">
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4" ref={scrollRef}>
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-[70vh] text-center px-4">
-                <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mb-6">
-                  <Zap className="w-10 h-10 text-white" />
-                </div>
-                <h2 className="text-2xl font-bold mb-2">Welcome to AION</h2>
-                <p className="text-muted-foreground mb-4 max-w-md">
-                  Describe the app you want to build. Your Lead CTO will talk you through the plan, push back on bad ideas, and coordinate 15 AI agents to build, test, and ship it.
+      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[1.15fr_0.85fr]">
+        <section className="space-y-6">
+          <div className="operator-panel relative overflow-hidden p-6 sm:p-8">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
+            <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-2xl">
+                <p className="operator-chip">Approval-first autonomy</p>
+                <h2 className="operator-title mt-4">
+                  One sharp CTO voice. Full execution behind it.
+                </h2>
+                <p className="operator-subtitle mt-4 max-w-xl">
+                  Talk to AION like a real operator. It plans, delegates, researches, tests, runs repos, and pauses only when a risky move needs your approval.
                 </p>
-                <p className="text-sm text-amber-500 font-medium mb-6">
-                  Your CTO is bold, honest, and goes the extra mile. Not a yes-man.
-                </p>
-
-                {/* Agent Cards — 3 tiers */}
-                <div className="w-full max-w-2xl mb-8">
-                  {/* Leadership Tier */}
-                  <div className="mb-3">
-                    <p className="text-[10px] uppercase tracking-wider text-amber-500 font-semibold mb-2">Leadership</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(['cto', 'business', 'research'] as AgentRole[]).map((role) => (
-                        <Card key={role} className={`p-2.5 text-left transition-colors ${role === 'cto' ? 'border-amber-500/50 bg-amber-500/5' : 'hover:border-amber-500/50'}`}>
-                          <div className="flex items-center gap-2">
-                            <div className="text-lg">{AGENT_EMOJIS[role]}</div>
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium">{AGENT_NAMES[role]}</div>
-                              <div className="text-[10px] text-muted-foreground truncate">{AGENT_DESCRIPTIONS[role]}</div>
-                            </div>
-                            {role === 'cto' && (
-                              <Badge variant="outline" className="text-[7px] ml-auto shrink-0 text-amber-500 border-amber-500/30">YOUR CTO</Badge>
-                            )}
-                          </div>
-                        </Card>
-                      ))}
-                    </div>
-                  </div>
-                  {/* Build Tier */}
-                  <div className="mb-3">
-                    <p className="text-[10px] uppercase tracking-wider text-emerald-500 font-semibold mb-2">Build</p>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(['frontend', 'backend', 'design', 'data', 'integration', 'security'] as AgentRole[]).map((role) => (
-                        <Card key={role} className="p-2 text-center hover:border-amber-500/50 transition-colors">
-                          <div className="text-lg">{AGENT_EMOJIS[role]}</div>
-                          <div className="text-[10px] font-medium">{AGENT_NAMES[role]}</div>
-                        </Card>
-                      ))}
-                    </div>
-                  </div>
-                  {/* Quality & Ship Tier */}
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-blue-500 font-semibold mb-2">Quality & Ship</p>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(['qa', 'devops', 'performance', 'compliance', 'docs', 'analytics'] as AgentRole[]).map((role) => (
-                        <Card key={role} className="p-2 text-center hover:border-amber-500/50 transition-colors">
-                          <div className="text-lg">{AGENT_EMOJIS[role]}</div>
-                          <div className="text-[10px] font-medium">{AGENT_NAMES[role]}</div>
-                        </Card>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Example prompts */}
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {[
-                    'Build me a habit tracker app',
-                    'Create a budget management tool',
-                    'Make a recipe generator with AI',
-                    'Build a project management board',
-                  ].map((example) => (
-                    <button
-                      key={example}
-                      onClick={() => setInput(example)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-border hover:bg-accent hover:border-amber-500/50 transition-colors"
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
               </div>
-            ) : (
-              <div className="space-y-4 max-w-3xl mx-auto">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    {msg.role === 'assistant' && (
-                      <div
-                        className="w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 mt-1"
-                        style={{
-                          backgroundColor: msg.agentRole
-                            ? `${AGENT_COLORS[msg.agentRole as AgentRole]}20`
-                            : '#f59e0b20',
-                        }}
-                      >
-                        {msg.agentEmoji || '🤖'}
-                      </div>
-                    )}
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                        msg.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : msg.agentRole === 'cto'
-                            ? 'bg-card border border-amber-500/20 shadow-sm'
-                            : 'bg-card border border-border'
-                      }`}
-                    >
-                      {msg.agentName && msg.role === 'assistant' && (
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="text-xs font-semibold" style={{ color: AGENT_COLORS[msg.agentRole as AgentRole] || '#f59e0b' }}>
-                            {msg.agentName}
-                          </span>
-                          {msg.agentRole === 'cto' && (
-                            <Badge variant="outline" className="text-[8px] px-1 py-0 text-amber-500 border-amber-500/30">
-                              LEAD
-                            </Badge>
-                          )}
-                          {msg.metadata?.confidence && (
-                            <span className="text-[10px] opacity-50 ml-auto">
-                              {(msg.metadata.confidence * 100).toFixed(0)}%
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {msg.role === 'user' ? (
-                        <div className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</div>
-                      ) : (
-                        <MarkdownRenderer content={msg.content} />
-                      )}
-                      {msg.metadata?.taskAssignments && msg.metadata.taskAssignments.length > 0 && (
-                        <div className="mt-3 pt-2 border-t border-border/50 space-y-1.5">
-                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Task Assignments</div>
-                          {msg.metadata.taskAssignments.map((ta: any, i: number) => (
-                            <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded-md px-2 py-1">
-                              <span>{AGENT_EMOJIS[ta.assignedTo as AgentRole]}</span>
-                              <span className="font-medium">{AGENT_NAMES[ta.assignedTo as AgentRole]}</span>
-                              <span className="text-muted-foreground truncate flex-1">{ta.taskDescription}</span>
-                              <Badge variant="secondary" className="text-[8px] px-1 py-0">{ta.priority}</Badge>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
 
-                {/* SSE Real-time Progress Panel */}
-                {isStreaming && sseProgress.length > 0 && (
-                  <div className="flex gap-3 justify-start">
-                    <div className="w-9 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                      <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+              <div className="grid grid-cols-2 gap-3 sm:min-w-[320px]">
+                <Card className="operator-card rounded-2xl">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      <Shield className="h-3.5 w-3.5 text-primary" />
+                      Control
                     </div>
-                    <div className="bg-card border border-amber-500/20 rounded-2xl px-4 py-3 max-w-[80%]">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Sparkles className="w-3 h-3 animate-pulse text-amber-500" />
-                        <span className="text-xs font-semibold text-amber-500">Auto Build in Progress</span>
-                        {currentStep && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                            {currentStep.step}/{currentStep.total} steps
-                          </Badge>
-                        )}
-                        {currentAgent && (
-                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
-                            {AGENT_EMOJIS[currentAgent]} {AGENT_NAMES[currentAgent]}
-                          </Badge>
-                        )}
-                      </div>
-                      {/* Progress bar */}
-                      {currentStep && (
-                        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden mb-2">
-                          <div
-                            className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-500"
-                            style={{ width: `${(currentStep.step / currentStep.total) * 100}%` }}
-                          />
-                        </div>
-                      )}
-                      {/* Progress events */}
-                      <ScrollArea className="max-h-40">
-                        <div className="space-y-1">
-                          {sseProgress.slice(-8).map((event, i) => (
-                            <div key={i} className="flex items-start gap-2 text-xs">
-                              <span className="mt-0.5 shrink-0">{getProgressIcon(event.type)}</span>
-                              <span className={
-                                event.type === 'error' ? 'text-red-500' :
-                                event.type === 'stuck_detected' ? 'text-yellow-600 dark:text-yellow-400' :
-                                event.type === 'complete' ? 'text-emerald-500 font-medium' :
-                                'text-muted-foreground'
-                              }>
-                                {event.message}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </ScrollArea>
+                    <p className="mt-3 text-2xl font-semibold">{projectId ? 'Live' : 'Ready'}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Phone-first approvals, repo boundaries, and operator-grade logs.</p>
+                  </CardContent>
+                </Card>
+                <Card className="operator-card rounded-2xl">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      <Zap className="h-3.5 w-3.5 text-primary" />
+                      Status
                     </div>
-                  </div>
-                )}
-
-                {/* Loading indicator (non-SSE) */}
-                {isLoading && !isStreaming && (
-                  <div className="flex gap-3 justify-start">
-                    <div className="w-9 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                      <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
-                    </div>
-                    <div className="bg-card border border-amber-500/20 rounded-2xl px-4 py-3">
-                      <div className="text-sm text-muted-foreground flex items-center gap-2">
-                        <Sparkles className="w-3 h-3 animate-pulse text-amber-500" />
-                        CTO is thinking...
-                      </div>
-                    </div>
-                  </div>
-                )}
+                    <p className="mt-3 text-2xl font-semibold capitalize">{projectStatus === 'idle' ? 'Standby' : projectStatus}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Lead CTO stays front-facing while specialists work underneath.</p>
+                  </CardContent>
+                </Card>
               </div>
-            )}
+            </div>
           </div>
 
-          {/* Input Area */}
-          <div className="border-t border-border p-4 bg-background/95 backdrop-blur">
-            <div className="max-w-3xl mx-auto">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                  placeholder={
-                    projectId
-                      ? 'Ask your CTO anything — change plans, check progress, challenge decisions...'
-                      : 'Describe the app you want to build...'
-                  }
-                  className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/50 placeholder:text-muted-foreground"
-                  disabled={isLoading || isStreaming}
-                />
-                <Button
-                  onClick={handleSend}
-                  disabled={isLoading || isStreaming || !input.trim()}
-                  className="rounded-xl px-4 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white"
-                >
-                  <Send className="w-4 h-4" />
-                </Button>
+          <div className="operator-panel overflow-hidden">
+            <div className="border-b border-border/70 px-5 py-4 sm:px-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Lead channel</p>
+                  <h3 className="mt-1 text-lg font-semibold tracking-[-0.03em]">Talk to the CTO</h3>
+                </div>
+                <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-primary">
+                  {projectId ? 'Active engagement' : 'New brief'}
+                </Badge>
               </div>
-              {projectId && !isLoading && !isStreaming && (
-                <div className="flex gap-2 mt-2">
-                  <Button
-                    onClick={handleContinue}
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg gap-1 text-xs"
-                  >
-                    <MessageSquare className="w-3 h-3" /> Ask CTO
-                  </Button>
-                  <Button
-                    onClick={handleAutoBuild}
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg gap-1 text-xs border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-                  >
-                    <FastForward className="w-3 h-3" /> Auto Build (5 steps)
-                  </Button>
-                  <Button
-                    onClick={() => router.push(`/project/${projectId}`)}
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg gap-1 text-xs"
-                  >
-                    <LayoutDashboard className="w-3 h-3" /> Dashboard
-                  </Button>
+            </div>
+
+            <div ref={scrollRef} className="max-h-[620px] overflow-y-auto px-4 py-5 sm:px-6">
+              {messages.length === 0 ? (
+                <div className="space-y-6">
+                  <div className="rounded-3xl border border-border/70 bg-background/60 p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/12 text-sm font-semibold text-primary">
+                        {AGENT_EMOJIS.cto}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold">{AGENT_NAMES.cto}</p>
+                          <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-[10px] uppercase tracking-[0.18em] text-primary">
+                            Lead
+                          </Badge>
+                        </div>
+                        <p className="mt-2 text-sm leading-7 text-muted-foreground">
+                          Bring me the product, the repo, or the problem. I will make the call, shape the build path, and drive the system until we have something shippable.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {EXAMPLE_PROMPTS.map(prompt => (
+                      <button
+                        key={prompt}
+                        type="button"
+                        onClick={() => setInput(prompt)}
+                        className="rounded-2xl border border-border/70 bg-card/70 px-4 py-4 text-left text-sm text-muted-foreground transition hover:border-primary/40 hover:bg-card"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map(message => {
+                    const isUser = message.role === 'user';
+                    const agentRole = message.agentRole || 'cto';
+
+                    return (
+                      <div key={message.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                        {!isUser && (
+                          <div
+                            className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-xs font-semibold"
+                            style={{ backgroundColor: `${AGENT_COLORS[agentRole] || '#f59e0b'}20`, color: AGENT_COLORS[agentRole] || '#f59e0b' }}
+                          >
+                            {message.agentEmoji || AGENT_EMOJIS[agentRole]}
+                          </div>
+                        )}
+
+                        <div
+                          className={`max-w-[85%] rounded-[1.5rem] px-4 py-3 sm:px-5 ${
+                            isUser
+                              ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/15'
+                              : message.agentRole === 'cto'
+                                ? 'border border-primary/20 bg-card shadow-sm'
+                                : 'border border-border/70 bg-card/80'
+                          }`}
+                        >
+                          {!isUser && (
+                            <div className="mb-2 flex items-center gap-2">
+                              <span className="text-xs font-semibold" style={{ color: AGENT_COLORS[agentRole] || '#f59e0b' }}>
+                                {message.agentName}
+                              </span>
+                              {message.agentRole === 'cto' && (
+                                <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-[10px] uppercase tracking-[0.18em] text-primary">
+                                  Lead
+                                </Badge>
+                              )}
+                              {message.metadata?.confidence && (
+                                <span className="ml-auto text-[10px] text-muted-foreground">
+                                  {(message.metadata.confidence * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {isUser ? (
+                            <p className="text-sm leading-7">{message.content}</p>
+                          ) : (
+                            <MarkdownRenderer content={message.content} />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {(isLoading || isStreaming) && (
+                    <div className="flex gap-3">
+                      <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/12 text-primary">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </div>
+                      <div className="rounded-[1.5rem] border border-primary/20 bg-card px-4 py-3">
+                        <p className="text-sm text-muted-foreground">
+                          {isStreaming ? 'Autonomous cycle is running. The team is executing.' : 'Lead CTO is evaluating the next move.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          </div>
-        </div>
 
-        {/* Agent Activity Panel (Sidebar) */}
-        {agentActivities.length > 0 && (
-          <div className="w-72 border-l border-border p-4 hidden lg:block overflow-y-auto">
-            <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
-              <Activity className="w-3 h-3" /> Agent Activity
-            </h3>
-            <div className="space-y-2">
-              {agentActivities.slice(-20).reverse().map((activity) => (
-                <Card key={activity.id} className="p-2.5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-base">{activity.agentEmoji}</span>
-                    <span className="text-xs font-medium" style={{ color: AGENT_COLORS[activity.agentRole as AgentRole] }}>
-                      {activity.agentName}
-                    </span>
-                    {activity.status === 'success' ? (
-                      <CheckCircle2 className="w-3 h-3 text-emerald-500 ml-auto" />
-                    ) : (
-                      <AlertCircle className="w-3 h-3 text-red-500 ml-auto" />
-                    )}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground line-clamp-3">
-                    {activity.action}
-                  </div>
-                  {activity.confidence !== undefined && (
-                    <div className="mt-1.5 flex items-center gap-1">
-                      <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${activity.confidence * 100}%`,
-                            backgroundColor: AGENT_COLORS[activity.agentRole as AgentRole] || '#f59e0b',
-                          }}
-                        />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">{(activity.confidence * 100).toFixed(0)}%</span>
-                    </div>
+            <div className="border-t border-border/70 px-4 py-4 sm:px-6">
+              <div className="flex flex-col gap-3">
+                <div className="flex gap-3">
+                  <textarea
+                    value={input}
+                    onChange={event => setInput(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder={projectId ? 'Talk to your CTO. Change the plan, inspect a repo, run a URL, challenge a decision.' : 'Describe what you want built or what you want AION to operate on.'}
+                    className="min-h-[88px] flex-1 resize-none rounded-[1.4rem] border border-border/70 bg-background/70 px-4 py-3 text-sm leading-6 outline-none transition focus:border-primary/40 focus:ring-4 focus:ring-primary/10"
+                    disabled={isLoading || isStreaming}
+                  />
+                  <Button
+                    onClick={() => void handleSend()}
+                    disabled={!input.trim() || isLoading || isStreaming}
+                    className="h-auto rounded-[1.4rem] px-5"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {projectId && (
+                    <>
+                      <Button variant="outline" size="sm" className="rounded-full" onClick={() => void handleContinue()}>
+                        <MessageSquare className="mr-2 h-4 w-4" />
+                        Ask for the call
+                      </Button>
+                      <Button variant="outline" size="sm" className="rounded-full border-primary/30 text-primary" onClick={() => void handleAutoBuild()}>
+                        <FastForward className="mr-2 h-4 w-4" />
+                        Run 5-step cycle
+                      </Button>
+                      <Button variant="outline" size="sm" className="rounded-full" onClick={() => router.push(`/project/${projectId}`)}>
+                        <Terminal className="mr-2 h-4 w-4" />
+                        Open war room
+                      </Button>
+                    </>
                   )}
-                </Card>
-              ))}
+                </div>
+              </div>
             </div>
           </div>
-        )}
-      </div>
+        </section>
+
+        <aside className="space-y-6">
+          <Card className="operator-panel overflow-hidden">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Lead readout</p>
+                  <h3 className="mt-1 text-lg font-semibold tracking-[-0.03em]">Current call</h3>
+                </div>
+                <Sparkles className="h-4 w-4 text-primary" />
+              </div>
+              <p className="mt-4 text-sm leading-7 text-muted-foreground">
+                {leadSummary?.content || 'No active briefing yet. Start with the outcome you want, the repo you care about, or the problem that needs the call.'}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="operator-panel overflow-hidden">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution lane</p>
+                  <h3 className="mt-1 text-lg font-semibold tracking-[-0.03em]">Live progress</h3>
+                </div>
+                {currentStep && (
+                  <Badge variant="outline" className="rounded-full">
+                    {currentStep.step}/{currentStep.total}
+                  </Badge>
+                )}
+              </div>
+
+              {isStreaming && currentStep && (
+                <div className="mt-4 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-2 rounded-full bg-gradient-to-r from-primary via-orange-500 to-amber-300 transition-all"
+                    style={{ width: `${(currentStep.step / currentStep.total) * 100}%` }}
+                  />
+                </div>
+              )}
+
+              <ScrollArea className="mt-4 h-[220px] pr-3">
+                <div className="space-y-3">
+                  {(sseProgress.length > 0 ? sseProgress.slice(-10).reverse() : []).map((event, index) => (
+                    <div key={`${event.timestamp}-${index}`} className="rounded-2xl border border-border/60 bg-background/55 p-3">
+                      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        {getProgressIcon(event.type)}
+                        {event.agentRole ? AGENT_NAMES[event.agentRole] : 'System'}
+                        {currentAgent === event.agentRole && <span className="text-primary">active</span>}
+                      </div>
+                      <p className="mt-2 text-sm text-foreground">{event.message}</p>
+                    </div>
+                  ))}
+
+                  {sseProgress.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-border/70 p-4 text-sm text-muted-foreground">
+                      No active autonomous cycle. Start a run when you want the system to move without manual stepping.
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          <Card className="operator-panel overflow-hidden">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Specialists</p>
+                  <h3 className="mt-1 text-lg font-semibold tracking-[-0.03em]">Visible team</h3>
+                </div>
+                <Activity className="h-4 w-4 text-primary" />
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                {(['cto', 'frontend', 'backend', 'qa', 'devops', 'research'] as AgentRole[]).map(role => (
+                  <div key={role} className="rounded-2xl border border-border/60 bg-background/55 p-3">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="flex h-10 w-10 items-center justify-center rounded-2xl text-xs font-semibold"
+                        style={{ backgroundColor: `${AGENT_COLORS[role]}20`, color: AGENT_COLORS[role] }}
+                      >
+                        {AGENT_EMOJIS[role]}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold">{AGENT_NAMES[role]}</p>
+                        <p className="text-xs text-muted-foreground">{AGENT_DESCRIPTIONS[role]}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
+      </main>
     </div>
   );
 }

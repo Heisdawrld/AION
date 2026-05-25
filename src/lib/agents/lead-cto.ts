@@ -1,45 +1,74 @@
-// AION — Lead CTO Agent
-// The orchestrator. Bold, opinionated, no yes-man.
-// Plans, delegates, reviews, pushes back, and makes final decisions.
-// Fully communicative with the user about everything happening.
+// AION - Lead CTO Agent
+// Plans, delegates, reviews, pushes back, and owns the final call.
 
 import { BaseAgent } from './base-agent';
 import type {
   AgentResponse,
   TaskAssignment,
-  ExecutionPlan,
   PRD,
-  AgentRole,
 } from '@/lib/types/aion';
 
-// ============================================================
-// THE CTO — BOLD, OPINIONATED, NO BULLSHIT
-// ============================================================
-const CTO_SYSTEM_PROMPT = `You are the Lead CTO of AION. You are direct, opinionated, and push back when ideas won't work. You explain WHY, offer alternatives, and go the extra mile. Be conversational — talk like a real CTO to a founder, not a chatbot. Be transparent about what agents are doing, blockers, and decisions.
+const CTO_SYSTEM_PROMPT = `You are the Lead CTO of AION.
 
-ROLE: Interpret user vision, review PRDs, create execution plans, delegate to agents, monitor progress, keep user informed, ensure product works end-to-end.
+IDENTITY:
+- You are the front-facing operator the user trusts.
+- You sound like a seasoned senior engineer and product operator.
+- You are sharp, calm, pragmatic, and commercially aware.
+- You do not moralize, posture, or waste motion.
 
-TEAM: Business Strategist (PRDs/features — assign FIRST), Frontend Lead (React/Next.js UI), Backend Lead (APIs/database), QA Engineer (tests/validates), DevOps Lead (build/deploy), Research Analyst (web search/competitors), Security Engineer (vulnerabilities/OWASP), Design Architect (UI/UX/accessibility), Data Engineer (schemas/migrations), Documentation Lead (README/API docs), Analytics Engineer (tracking/dashboards), Integration Specialist (3rd-party APIs/OAuth), Performance Engineer (optimization/Core Web Vitals), Compliance Officer (licenses/GDPR/privacy).
+ROLE:
+- Interpret the user's vision.
+- Review product scope and technical feasibility.
+- Create execution plans.
+- Delegate work to specialist agents.
+- Track risks, blockers, approvals, and delivery readiness.
+- Report upward to the user with clear judgment.
 
-RULES:
-1. Only reference info in CURRENT PROJECT STATE
-2. Never invent unrequested features (suggestions OK, mark clearly)
-3. Never approve deployment without QA pass
-4. Intervene when agents exceed max retries
-5. Prefer simple working over complex broken
-6. Never stop until app is live and URL works
-7. If stuck, re-plan with different approach
+TEAM:
+- Product Strategist handles PRD and feature framing first.
+- UI Systems Lead handles app UI and interaction.
+- Platform Lead handles APIs, data flow, and server logic.
+- QA Lead validates correctness and readiness.
+- Delivery Lead handles build, repo, and deployment operations.
+- Research Lead handles external research and evidence gathering.
+- Security Lead, Design Director, Data Lead, Docs Lead, Analytics Lead, Integration Lead, Performance Lead, and Compliance Lead support when relevant.
+
+OPERATING RULES:
+1. Only rely on the current project state and provided context.
+2. Do not invent features the user did not ask for. Suggestions are allowed, but label them clearly.
+3. Never approve deployment without QA sign-off.
+4. If the plan is weak, say so and replace it with a better one.
+5. Prefer simple working systems over complex brittle ones.
+6. Keep the user informed without exposing unnecessary internal chatter.
+7. If the system is stuck, re-plan decisively.
+
+STATUS UPDATE STYLE:
+- Start with the actual call.
+- Then what changed.
+- Then what happens next.
+- Keep it crisp, high-signal, and executive.
 
 OUTPUT JSON:
 {"status":"success|failed|needs_clarification","output":{"analysis":"...","decisions":[{"decision":"...","reasoning":"...","basedOn":"..."}],"taskAssignments":[{"taskDescription":"...","assignedTo":"agent_role","priority":"critical|high|medium|low","phase":"discover|plan|build|test|ship","context":"..."}],"statusUpdate":"...","nextSteps":["..."]},"confidence":0.0-1.0}`;
 
-// ============================================================
-// CONVERSATIONAL CTO PROMPT — for follow-up discussions
-// ============================================================
-const CTO_CONVERSATION_PROMPT = `You are the Lead CTO of AION having a CONVERSATION with the user. Be brutally honest, opinionated, and push back on bad ideas. Talk like a real CTO — conversational, direct, not robotic. Go the extra mile. Share what agents are working on, problems, and decisions.
+const CTO_CONVERSATION_PROMPT = `You are the Lead CTO of AION in active conversation with the user.
+
+BEHAVIOR:
+- Speak like an elite senior operator.
+- Be direct, useful, and grounded.
+- Push back on weak ideas without sounding defensive or preachy.
+- If the user is right, say so cleanly and move.
+- If the user is wrong, explain the constraint and give the better path.
+- Sound premium, not theatrical.
+
+RESPONSE SHAPE:
+- Lead with the call or answer.
+- Mention the operational state when useful.
+- Translate specialist work into one coherent narrative.
+- Do not sound like a committee.
 
 OUTPUT JSON:
-{"status":"success|failed|needs_clarification","output":{"analysis":"...","decisions":[{"decision":"...","reasoning":"...","basedOn":"..."}],"taskAssignments":[{"taskDescription":"...","assignedTo":"agent_role","priority":"critical|high|medium|low","phase":"discover|plan|build|test|ship","context":"..."}],"statusUpdate":"YOUR MESSAGE to the user — conversational, honest, bold","nextSteps":["..."],"actionType":"chat|update_plan|add_tasks|modify_feature|push_back|go_extra|approve"},"confidence":0.0-1.0}`;
+{"status":"success|failed|needs_clarification","output":{"analysis":"...","decisions":[{"decision":"...","reasoning":"...","basedOn":"..."}],"taskAssignments":[{"taskDescription":"...","assignedTo":"agent_role","priority":"critical|high|medium|low","phase":"discover|plan|build|test|ship","context":"..."}],"statusUpdate":"...","nextSteps":["..."],"actionType":"chat|update_plan|add_tasks|modify_feature|push_back|go_extra|approve"},"confidence":0.0-1.0}`;
 
 interface CTOOutput {
   status: 'success' | 'failed' | 'needs_clarification';
@@ -67,7 +96,6 @@ export class LeadCTOAgent extends BaseAgent {
 
   async execute(task: string, context: string): Promise<AgentResponse> {
     const userMessage = `CURRENT PROJECT STATE:\n${context}\n\nYOUR TASK:\n${task}`;
-
     const result = await this.callAgentAI<CTOOutput>(userMessage);
 
     if (!result.data) {
@@ -75,15 +103,14 @@ export class LeadCTOAgent extends BaseAgent {
         'cto-task',
         'needs_clarification',
         {
-          analysis: 'I had trouble structuring my response. Let me try again.',
-          statusUpdate: '⚠️ CTO Agent encountered a formatting issue. Retrying...',
+          analysis: 'Structured CTO response failed to parse cleanly.',
+          statusUpdate: 'I hit a formatting issue while planning. I am retrying with a narrower response.',
         },
         0.3
       );
     }
 
     const data = result.data;
-
     return this.createResponse(
       'cto-task',
       data.status || 'success',
@@ -94,58 +121,43 @@ export class LeadCTOAgent extends BaseAgent {
         statusUpdate: data.output?.statusUpdate,
         nextSteps: data.output?.nextSteps,
       },
-      data.confidence || 0.7
+      data.confidence || 0.72
     );
   }
 
-  /**
-   * CONVERSATIONAL MODE — Talk to the user like a real CTO
-   * This is the method used for follow-up conversations after project kickoff.
-   * The CTO uses its conversational prompt, has access to conversation history,
-   * and can push back, suggest alternatives, or go the extra mile.
-   */
   async converse(
     userMessage: string,
     conversationHistory: string,
     projectContext: string
   ): Promise<AgentResponse> {
-    const fullMessage = `## CONVERSATION HISTORY (what you and the user have discussed so far):
+    const fullMessage = `## CONVERSATION HISTORY
 ${conversationHistory || 'This is the beginning of the conversation.'}
 
-## CURRENT PROJECT STATE:
+## CURRENT PROJECT STATE
 ${projectContext}
 
-## USER'S LATEST MESSAGE:
+## USER MESSAGE
 "${userMessage}"
 
----
+Respond as the Lead CTO.
+- Give the real call.
+- Mention relevant execution context.
+- If specialists are working, summarize their progress in one voice.
+- Ask for approval only when the next move is genuinely risky or ambiguous.
+- Avoid filler and generic optimism.`;
 
-Respond to the user. Remember:
-- Be HONEST. If their idea won't work, say so and explain why.
-- Be BOLD. If there's a better way, tell them. Don't just agree.
-- Be TRANSPARENT. Tell them what's happening with their project, what the agents are doing.
-- Be CONVERSATIONAL. Talk like a real CTO, not a chatbot.
-- If they want to change the plan, evaluate the change honestly. Don't just say yes.
-- If they ask about progress, give them a real status update with specifics.
-- If they have a bad idea, push back. "I don't think that's the right call because..."
-- If they have a great idea, go all in. "That's actually brilliant. Let me adjust the plan."
-- If they're confused, explain clearly without being condescending.
-- GO THE EXTRA MILE whenever you can.`;
-
-    // Use the conversational prompt for follow-up chats
     const result = await this.callAgentAIWithPrompt<CTOOutput>(
       CTO_CONVERSATION_PROMPT,
       fullMessage
     );
 
     if (!result.data) {
-      // Fallback: try to build a reasonable response from raw text
-      const rawText = result.raw || 'I\'m having trouble processing that. Give me a second...';
+      const rawText = result.raw || 'I hit a response formatting issue. Here is the operational truth: I need to retry that cleanly.';
       return this.createResponse(
         'cto-conversation',
         'needs_clarification',
         {
-          analysis: 'Conversational response parsing failed',
+          analysis: 'Conversational CTO parsing failed.',
           statusUpdate: rawText.substring(0, 1000),
         },
         0.4
@@ -153,7 +165,6 @@ Respond to the user. Remember:
     }
 
     const data = result.data;
-
     return this.createResponse(
       'cto-conversation',
       data.status || 'success',
@@ -164,89 +175,69 @@ Respond to the user. Remember:
         statusUpdate: data.output?.statusUpdate,
         nextSteps: data.output?.nextSteps,
       },
-      data.confidence || 0.7
+      data.confidence || 0.75
     );
   }
 
-  /**
-   * Specialized method: Kick off a new project by analyzing the user's idea
-   * and creating initial task assignments.
-   */
   async kickoffProject(userIdea: string, projectState: string): Promise<AgentResponse> {
-    const task = `A user wants to build: "${userIdea}"
+    const task = `A user wants to build: "${userIdea}".
 
-Analyze this idea and create an execution plan:
-1. FIRST: Tell the user your honest assessment. Is this a good idea? Is it feasible? What are the risks?
-2. Break this into phases (discover, plan, build, test, ship)
-3. Create task assignments for your team
-4. FIRST TASK: Assign the Business Strategist to create a PRD
-5. Then plan the build tasks for Frontend and Backend
-6. Plan QA testing and DevOps deployment
-7. If the user's idea has problems, tell them. Suggest improvements.
-8. If you see opportunities to make it better than what they asked for, propose them.
+Your job:
+1. Give an honest assessment of the idea, feasibility, and main risks.
+2. Frame the project into discover, plan, build, test, and ship.
+3. Assign the first PRD task to Product Strategist.
+4. Queue the core build path for UI Systems Lead and Platform Lead.
+5. Make QA and Delivery explicit checkpoints, not afterthoughts.
+6. If the idea is bloated, narrow it.
+7. If there is a stronger route, say it plainly.
 
-Be specific. Each task should be clear enough for a senior specialist to execute independently.
-Your statusUpdate should be conversational — like a CTO talking to the founder about the plan.`;
+The statusUpdate should sound like a premium CTO briefing a founder.`;
 
     return this.execute(task, projectState);
   }
 
-  /**
-   * Review a PRD created by the Business Strategist
-   */
   async reviewPRD(prd: PRD, projectState: string): Promise<AgentResponse> {
-    const task = `The Business Strategist has created a PRD. Review it:
+    const task = `Review this PRD.
 
 PRD:
 ${JSON.stringify(prd, null, 2)}
 
 Check:
-1. Are all user-requested features covered?
-2. Are acceptance criteria clear for each feature?
-3. Is the MVP scope well-defined?
-4. Are there any contradictions or gaps?
-5. Is anything over-engineered or under-specified?
+1. Coverage of user-requested outcomes.
+2. Clarity of acceptance criteria.
+3. Whether the MVP is sharp or bloated.
+4. Missing technical decisions or contradictions.
+5. Whether the team can execute it without thrash.
 
-If APPROVED, create detailed task assignments for the build phase.
-If REJECTED, explain what needs to be revised — be direct.
-
-Tell the user what you think of the PRD. Be honest.`;
+If approved, create the build-phase task assignments.
+If not approved, reject it directly and say what must change.`;
 
     return this.execute(task, projectState);
   }
 
-  /**
-   * Intervene when an agent is stuck
-   */
   async intervene(reason: string, projectState: string): Promise<AgentResponse> {
-    const task = `INTERVENTION REQUIRED: ${reason}
+    const task = `Intervention required: ${reason}
 
-Review the current project state and decide:
-1. Should we retry with a different approach?
-2. Should we simplify the task?
-3. Should we skip this feature?
-4. Should we ask the user for guidance?
+Decide whether to:
+1. Retry with a different approach.
+2. Simplify scope.
+3. Skip a broken path.
+4. Ask the user for a decision.
 
-Make a decision and create new task assignments if needed.
-Tell the user what happened and what you're doing about it.`;
+Be decisive and reset the team onto the best route.`;
 
     return this.execute(task, projectState);
   }
 
-  /**
-   * Give a status update to the user
-   */
   async statusUpdate(projectState: string): Promise<AgentResponse> {
-    const task = `Give the user a comprehensive status update on their project.
+    const task = `Give the user a real status briefing.
 
 Include:
-- What's been completed so far
-- What agents are currently working on
-- Any blockers or issues
-- What's coming next
-- Your honest assessment of how things are going
-
-Be conversational and transparent. No fluff.`;
+1. What is actually complete.
+2. What is running now.
+3. What is blocked or risky.
+4. What happens next.
+5. Your honest read on delivery quality and momentum.`;
 
     return this.execute(task, projectState);
   }

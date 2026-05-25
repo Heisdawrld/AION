@@ -241,6 +241,94 @@ async function main() {
         updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )`
     },
+    {
+      name: 'RepoWorkspace',
+      sql: `CREATE TABLE IF NOT EXISTS RepoWorkspace (
+        id TEXT PRIMARY KEY NOT NULL,
+        projectId TEXT NOT NULL,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        repoUrl TEXT,
+        repoProvider TEXT,
+        defaultBranch TEXT DEFAULT 'main',
+        currentBranch TEXT DEFAULT 'main',
+        rootPath TEXT,
+        status TEXT NOT NULL DEFAULT 'inactive',
+        isPrimary BOOLEAN NOT NULL DEFAULT false,
+        lastSyncedAt DATETIME,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (projectId) REFERENCES Project(id) ON DELETE CASCADE,
+        CONSTRAINT RepoWorkspace_projectId_slug_key UNIQUE (projectId, slug)
+      )`
+    },
+    {
+      name: 'ExecutionRun',
+      sql: `CREATE TABLE IF NOT EXISTS ExecutionRun (
+        id TEXT PRIMARY KEY NOT NULL,
+        projectId TEXT NOT NULL,
+        workspaceId TEXT,
+        agentRole TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        summary TEXT NOT NULL,
+        command TEXT,
+        requestedBy TEXT,
+        approvalRequired BOOLEAN NOT NULL DEFAULT false,
+        startedAt DATETIME,
+        completedAt DATETIME,
+        output TEXT,
+        error TEXT,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (projectId) REFERENCES Project(id) ON DELETE CASCADE,
+        FOREIGN KEY (workspaceId) REFERENCES RepoWorkspace(id) ON DELETE SET NULL
+      )`
+    },
+    {
+      name: 'ApprovalRequest',
+      sql: `CREATE TABLE IF NOT EXISTS ApprovalRequest (
+        id TEXT PRIMARY KEY NOT NULL,
+        projectId TEXT NOT NULL,
+        workspaceId TEXT,
+        runId TEXT,
+        type TEXT NOT NULL,
+        riskLevel TEXT NOT NULL DEFAULT 'medium',
+        status TEXT NOT NULL DEFAULT 'pending',
+        summary TEXT NOT NULL,
+        commandPreview TEXT,
+        diffSummary TEXT,
+        requestedBy TEXT,
+        decidedBy TEXT,
+        decisionReason TEXT,
+        decidedAt DATETIME,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (projectId) REFERENCES Project(id) ON DELETE CASCADE,
+        FOREIGN KEY (workspaceId) REFERENCES RepoWorkspace(id) ON DELETE SET NULL,
+        FOREIGN KEY (runId) REFERENCES ExecutionRun(id) ON DELETE SET NULL
+      )`
+    },
+    {
+      name: 'ExecutionArtifact',
+      sql: `CREATE TABLE IF NOT EXISTS ExecutionArtifact (
+        id TEXT PRIMARY KEY NOT NULL,
+        projectId TEXT NOT NULL,
+        workspaceId TEXT,
+        runId TEXT,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        path TEXT,
+        contentType TEXT,
+        content TEXT,
+        metadata TEXT,
+        sizeBytes INTEGER,
+        createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (projectId) REFERENCES Project(id) ON DELETE CASCADE,
+        FOREIGN KEY (workspaceId) REFERENCES RepoWorkspace(id) ON DELETE SET NULL,
+        FOREIGN KEY (runId) REFERENCES ExecutionRun(id) ON DELETE SET NULL
+      )`
+    },
   ];
 
   const indexes = [
@@ -256,6 +344,15 @@ async function main() {
     'CREATE INDEX IF NOT EXISTS AgentTaskPattern_agentRole_idx ON AgentTaskPattern(agentRole)',
     'CREATE INDEX IF NOT EXISTS AgentErrorResolution_agentRole_idx ON AgentErrorResolution(agentRole)',
     'CREATE INDEX IF NOT EXISTS AgentProjectContext_projectId_idx ON AgentProjectContext(projectId)',
+    'CREATE INDEX IF NOT EXISTS RepoWorkspace_projectId_idx ON RepoWorkspace(projectId)',
+    'CREATE INDEX IF NOT EXISTS ExecutionRun_projectId_idx ON ExecutionRun(projectId)',
+    'CREATE INDEX IF NOT EXISTS ExecutionRun_workspaceId_idx ON ExecutionRun(workspaceId)',
+    'CREATE INDEX IF NOT EXISTS ApprovalRequest_projectId_idx ON ApprovalRequest(projectId)',
+    'CREATE INDEX IF NOT EXISTS ApprovalRequest_workspaceId_idx ON ApprovalRequest(workspaceId)',
+    'CREATE INDEX IF NOT EXISTS ApprovalRequest_runId_idx ON ApprovalRequest(runId)',
+    'CREATE INDEX IF NOT EXISTS ExecutionArtifact_projectId_idx ON ExecutionArtifact(projectId)',
+    'CREATE INDEX IF NOT EXISTS ExecutionArtifact_workspaceId_idx ON ExecutionArtifact(workspaceId)',
+    'CREATE INDEX IF NOT EXISTS ExecutionArtifact_runId_idx ON ExecutionArtifact(runId)',
   ];
 
   console.log(`\nCreating ${tables.length} tables...`);
