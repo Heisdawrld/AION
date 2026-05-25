@@ -3,6 +3,7 @@
 // Used for npm install, npm run build, and other operations.
 // Vercel-compatible: gracefully degrades in serverless environment.
 
+import { execSync } from 'child_process';
 import { workspaceManager } from './workspace-manager';
 import type { GitOperationResult, DevOpsChecklist } from '@/lib/types/aion';
 
@@ -33,7 +34,6 @@ export class CommandRunner {
       };
     }
 
-    const { execSync } = require('child_process');
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
     const timeout = options?.timeout || 120000; // 2 min default
     const startTime = Date.now();
@@ -449,7 +449,6 @@ export class CommandRunner {
       };
     }
 
-    const { execSync } = require('child_process');
     const workspacePath = workspaceManager.getWorkspacePath(projectId);
 
     try {
@@ -496,3 +495,21 @@ export class CommandRunner {
 
 // Singleton
 export const commandRunner = new CommandRunner();
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
+/home/engine/.bashrc: line 1: syntax error near unexpected token `('
+/home/engine/.bashrc: line 1: `. /etc/profile.d/workload-containment.shn# ~/.bashrc: executed by bash(1) for non-login shells.'
