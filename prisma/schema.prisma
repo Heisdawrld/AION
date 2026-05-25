@@ -32,6 +32,10 @@ model Project {
   deployments  Deployment[]
   conversations ConversationMessage[]
   costEntries  AICostEntry[]
+  workspaces   RepoWorkspace[]
+  runs         ExecutionRun[]
+  approvals    ApprovalRequest[]
+  artifacts    ExecutionArtifact[]
 }
 
 model Task {
@@ -209,4 +213,98 @@ model BudgetConfig {
   alertThreshold Float    @default(0.8)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+}
+
+// ============================================================
+// EXECUTION CONTROL PLANE
+// ============================================================
+
+model RepoWorkspace {
+  id            String    @id @default(cuid())
+  projectId     String
+  name          String
+  slug          String
+  repoUrl       String?
+  repoProvider  String?
+  defaultBranch String?   @default("main")
+  currentBranch String?   @default("main")
+  rootPath      String?
+  status        String    @default("inactive") // inactive | ready | syncing | running | error
+  isPrimary     Boolean   @default(false)
+  lastSyncedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  project   Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs      ExecutionRun[]
+  approvals ApprovalRequest[]
+  artifacts ExecutionArtifact[]
+
+  @@unique([projectId, slug])
+}
+
+model ExecutionRun {
+  id               String    @id @default(cuid())
+  projectId        String
+  workspaceId      String?
+  agentRole        String?
+  kind             String    // command | git | browser | scrape | build | test | deploy | research
+  status           String    @default("queued") // queued | awaiting_approval | running | blocked | completed | failed | cancelled
+  summary          String
+  command          String?
+  requestedBy      String?
+  approvalRequired Boolean   @default(false)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  output           String?
+  error            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  project   Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace RepoWorkspace?      @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  approvals ApprovalRequest[]
+  artifacts ExecutionArtifact[]
+}
+
+model ApprovalRequest {
+  id             String    @id @default(cuid())
+  projectId      String
+  workspaceId    String?
+  runId          String?
+  type           String    // git_push | deploy | credentials | destructive_command | secret_change | migration
+  riskLevel      String    @default("medium") // low | medium | high | critical
+  status         String    @default("pending") // pending | approved | rejected | expired
+  summary        String
+  commandPreview String?
+  diffSummary    String?
+  requestedBy    String?
+  decidedBy      String?
+  decisionReason String?
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace RepoWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  run       ExecutionRun?  @relation(fields: [runId], references: [id], onDelete: SetNull)
+}
+
+model ExecutionArtifact {
+  id           String    @id @default(cuid())
+  projectId    String
+  workspaceId  String?
+  runId        String?
+  kind         String    // log | diff | screenshot | html | json | test_report | browser_trace
+  title        String
+  path         String?
+  contentType  String?
+  content      String?
+  metadata     String?
+  sizeBytes    Int?
+  createdAt    DateTime  @default(now())
+
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace RepoWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  run       ExecutionRun?  @relation(fields: [runId], references: [id], onDelete: SetNull)
 }

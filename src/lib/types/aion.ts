@@ -241,6 +241,13 @@ export type ProjectStatus = 'planning' | 'building' | 'testing' | 'deploying' | 
 export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'done' | 'failed';
 export type BuildStatus = 'never' | 'building' | 'success' | 'failed';
 export type DeployStatus = 'never' | 'deploying' | 'deployed' | 'failed';
+export type WorkspaceStatus = 'inactive' | 'ready' | 'syncing' | 'running' | 'error';
+export type RunKind = 'command' | 'git' | 'browser' | 'scrape' | 'build' | 'test' | 'deploy' | 'research';
+export type RunStatus = 'queued' | 'awaiting_approval' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+export type ApprovalType = 'git_push' | 'deploy' | 'credentials' | 'destructive_command' | 'secret_change' | 'migration';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type ArtifactKind = 'log' | 'diff' | 'screenshot' | 'html' | 'json' | 'test_report' | 'browser_trace';
 
 export interface ProjectBoardState {
   projectId: string;
@@ -257,6 +264,79 @@ export interface ProjectBoardState {
   liveUrl: string | null;
   totalCycles: number;
   lastActivityAt: string;
+  workspaceCount: number;
+  activeRunCount: number;
+  pendingApprovalCount: number;
+}
+
+export interface RepoWorkspaceSummary {
+  id: string;
+  projectId: string;
+  name: string;
+  slug: string;
+  repoUrl: string | null;
+  repoProvider: string | null;
+  defaultBranch: string | null;
+  currentBranch: string | null;
+  rootPath: string | null;
+  status: WorkspaceStatus;
+  isPrimary: boolean;
+  lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExecutionRunSummary {
+  id: string;
+  projectId: string;
+  workspaceId: string | null;
+  agentRole?: AgentRole;
+  kind: RunKind;
+  status: RunStatus;
+  summary: string;
+  command?: string | null;
+  requestedBy?: string | null;
+  approvalRequired: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  output?: string | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApprovalRequestSummary {
+  id: string;
+  projectId: string;
+  workspaceId: string | null;
+  runId: string | null;
+  type: ApprovalType;
+  riskLevel: RiskLevel;
+  status: ApprovalStatus;
+  summary: string;
+  commandPreview?: string | null;
+  diffSummary?: string | null;
+  requestedBy?: string | null;
+  decidedBy?: string | null;
+  decisionReason?: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExecutionArtifactSummary {
+  id: string;
+  projectId: string;
+  workspaceId: string | null;
+  runId: string | null;
+  kind: ArtifactKind;
+  title: string;
+  path?: string | null;
+  contentType?: string | null;
+  content?: string | null;
+  metadata?: string | null;
+  sizeBytes?: number | null;
+  createdAt: string;
 }
 
 // ============================================================

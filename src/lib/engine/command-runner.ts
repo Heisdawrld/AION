@@ -24,6 +24,14 @@ export class CommandRunner {
    * Gracefully returns error in serverless environments
    */
   runInWorkspace(projectId: string, command: string, options?: { timeout?: number }): CommandResult {
+    const workspacePath = workspaceManager.getWorkspacePath(projectId);
+    return this.runInPath(workspacePath, command, options);
+  }
+
+  /**
+   * Run a command in an arbitrary workspace path under trusted control.
+   */
+  runInPath(workspacePath: string, command: string, options?: { timeout?: number }): CommandResult {
     if (IS_VERCEL) {
       return {
         success: false,
@@ -34,7 +42,6 @@ export class CommandRunner {
       };
     }
 
-    const workspacePath = workspaceManager.getWorkspacePath(projectId);
     const timeout = options?.timeout || 120000; // 2 min default
     const startTime = Date.now();
 

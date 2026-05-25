@@ -1,30 +1,23 @@
-// AION — Terminal API Route
-// Executes arbitrary shell commands in project workspaces.
-// Like having an IDE terminal — but scoped to the project workspace.
-// Graceful fallback on Vercel serverless (no shell access).
+// AION - Terminal API Route
+// Queues terminal commands for worker execution and exposes workspace files.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { boardManager } from '@/lib/engine/board-manager';
 import { workspaceManager } from '@/lib/engine/workspace-manager';
 
-// Vercel serverless function timeout
 export const maxDuration = 30;
 
-// Check if we're in a serverless environment
 function isServerless(): boolean {
-  // Vercel sets VERCEL=1
   return process.env.VERCEL === '1';
 }
 
-// ============================================================
-// SAFETY: Blocked commands that could damage the host system
-// ============================================================
 const BLOCKED_COMMANDS = [
   'rm -rf /',
   'rm -rf ~',
   'rm -rf /*',
   'mkfs',
   'dd if=',
-  ':(){:|:&};:',   // fork bomb
+  ':(){:|:&};:',
   'shutdown',
   'reboot',
   'init 0',
@@ -36,190 +29,122 @@ const BLOCKED_COMMANDS = [
   'rd /s /q C:',
 ];
 
-// Commands that require explicit confirmation flag
 const SENSITIVE_PATTERNS = [
-  /\brm\s+(-rf?|-fr?)\s+[^.]/,  // rm -rf something (not ./something)
-  /\bgit\s+push\s+--force/,       // force push
-  /\bnpm\s+publish/,               // publish to npm
-  /\bdocker\s+rm/,                 // remove docker containers
-  /\bkubectl\s+delete/,            // k8s delete
+  /\brm\s+(-rf?|-fr?)\s+[^.]/,
+  /\bgit\s+push\s+--force/,
+  /\bnpm\s+publish/,
+  /\bdocker\s+rm/,
+  /\bkubectl\s+delete/,
 ];
 
-// Max output length to prevent memory issues
 const MAX_OUTPUT_LENGTH = 100_000;
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { projectId, command, timeout = 30000 } = body;
+    const { projectId, workspaceId, command } = body;
 
     if (!projectId) {
-      return NextResponse.json(
-        { error: 'projectId is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
 
     if (!command || typeof command !== 'string') {
-      return NextResponse.json(
-        { error: 'command is required and must be a string' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'command is required and must be a string' }, { status: 400 });
     }
 
-    // Trim the command
     const trimmedCommand = command.trim();
-
     if (!trimmedCommand) {
-      return NextResponse.json(
-        { error: 'command cannot be empty' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'command cannot be empty' }, { status: 400 });
     }
 
-    // ========================================
-    // SAFETY: Block dangerous commands
-    // ========================================
     const lowerCommand = trimmedCommand.toLowerCase();
-
     for (const blocked of BLOCKED_COMMANDS) {
       if (lowerCommand.includes(blocked.toLowerCase())) {
         return NextResponse.json({
           success: false,
           exitCode: 1,
           stdout: '',
-          stderr: `⛔ Command blocked for safety: "${blocked}" is not allowed. This terminal is scoped to your project workspace.`,
+          stderr: `Command blocked for safety: "${blocked}" is not allowed.`,
           duration: 0,
           blocked: true,
         });
       }
     }
 
-    // Check sensitive patterns
-    for (const pattern of SENSITIVE_PATTERNS) {
-      if (pattern.test(trimmedCommand)) {
-        return NextResponse.json({
-          success: false,
-          exitCode: 1,
-          stdout: '',
-          stderr: `⚠️ Potentially destructive command detected. If you're sure, use the AION dashboard or CLI directly. This terminal prevents accidental data loss.`,
-          duration: 0,
-          blocked: true,
-        });
-      }
+    const approvalRequired = SENSITIVE_PATTERNS.some(pattern => pattern.test(trimmedCommand));
+
+    let targetWorkspace = workspaceId
+      ? await boardManager.getWorkspace(workspaceId)
+      : await boardManager.getPrimaryWorkspace(projectId);
+
+    if (!targetWorkspace) {
+      const createdWorkspaceId = await boardManager.createWorkspace(projectId, {
+        name: 'Primary Workspace',
+        slug: 'primary',
+        rootPath: projectId,
+        status: 'ready',
+        isPrimary: true,
+      });
+      await workspaceManager.createRepoWorkspace(createdWorkspaceId, projectId);
+      targetWorkspace = await boardManager.getWorkspace(createdWorkspaceId);
     }
 
-    // ========================================
-    // SERVERLESS CHECK: No shell access on Vercel
-    // ========================================
-    if (isServerless()) {
-      return NextResponse.json({
-        success: false,
-        exitCode: 1,
-        stdout: '',
-        stderr: 'Terminal commands are not available in serverless environment. Deploy AION on a VPS or use Railway/Fly.io for full terminal access.',
-        duration: 0,
-        serverless: true,
+    if (!targetWorkspace) {
+      return NextResponse.json(
+        { error: 'Unable to resolve a workspace for terminal execution.' },
+        { status: 500 }
+      );
+    }
+
+    const workspacePath = workspaceManager.getRepoWorkspacePath(
+      targetWorkspace.id,
+      targetWorkspace.rootPath
+    );
+
+    await workspaceManager.createRepoWorkspace(
+      targetWorkspace.id,
+      targetWorkspace.rootPath ?? targetWorkspace.id
+    );
+
+    const runId = await boardManager.createRun(projectId, {
+      workspaceId: targetWorkspace.id,
+      kind: 'command',
+      status: approvalRequired ? 'awaiting_approval' : 'queued',
+      summary: `Terminal command: ${trimmedCommand}`,
+      command: trimmedCommand,
+      requestedBy: 'user',
+      approvalRequired,
+    });
+
+    if (approvalRequired) {
+      await boardManager.createApprovalRequest(projectId, {
+        workspaceId: targetWorkspace.id,
+        runId,
+        type: 'destructive_command',
+        riskLevel: 'high',
+        summary: `Approve terminal command in ${targetWorkspace.name}`,
+        commandPreview: trimmedCommand,
+        requestedBy: 'user',
       });
     }
 
-    // Dynamic import of execSync only when NOT on serverless
-    const { execSync } = await import('child_process');
-
-    // ========================================
-    // RESOLVE WORKSPACE PATH
-    // ========================================
-    const workspacePath = workspaceManager.getWorkspacePath(projectId);
-
-    // Verify workspace exists
-    try {
-      const workspaceExists = await workspaceManager.workspaceExists(projectId);
-      if (!workspaceExists) {
-        return NextResponse.json({
-          success: false,
-          exitCode: 1,
-          stdout: '',
-          stderr: `Workspace not found. Initialize the project first.`,
-          duration: 0,
-        });
-      }
-    } catch (fsError: any) {
-      return NextResponse.json({
-        success: false,
-        exitCode: 1,
-        stdout: '',
-        stderr: 'Workspace not accessible in serverless environment.',
-        duration: 0,
-      });
-    }
-
-    // ========================================
-    // EXECUTE THE COMMAND
-    // ========================================
-    const startTime = Date.now();
-    const maxTimeout = Math.min(timeout, 120000); // Cap at 2 minutes
-
-    try {
-      const stdout = execSync(trimmedCommand, {
-        cwd: workspacePath,
-        timeout: maxTimeout,
-        encoding: 'utf-8',
-        maxBuffer: 1024 * 1024 * 5, // 5MB buffer
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          NODE_ENV: 'production',
-          CI: 'true',
-          FORCE_COLOR: '0', // No ANSI colors in output
-          TERM: 'dumb',     // Dumb terminal — no escape sequences
-        },
-      });
-
-      const duration = Date.now() - startTime;
-
-      // Truncate output if too large
-      const truncatedStdout = stdout.length > MAX_OUTPUT_LENGTH
-        ? stdout.substring(0, MAX_OUTPUT_LENGTH) + '\n... [output truncated]'
-        : stdout;
-
-      return NextResponse.json({
-        success: true,
-        exitCode: 0,
-        stdout: truncatedStdout,
-        stderr: '',
-        duration,
-        command: trimmedCommand,
-        workspacePath,
-      });
-    } catch (error: any) {
-      const duration = Date.now() - startTime;
-      const stdout = (error.stdout || '').toString();
-      const stderr = (error.stderr || error.message || '').toString();
-
-      const truncatedStdout = stdout.length > MAX_OUTPUT_LENGTH
-        ? stdout.substring(0, MAX_OUTPUT_LENGTH) + '\n... [output truncated]'
-        : stdout;
-
-      const truncatedStderr = stderr.length > MAX_OUTPUT_LENGTH
-        ? stderr.substring(0, MAX_OUTPUT_LENGTH) + '\n... [output truncated]'
-        : stderr;
-
-      // Check if it was a timeout
-      const isTimeout = error.killed === true || error.signal === 'SIGTERM';
-
-      return NextResponse.json({
-        success: false,
-        exitCode: error.status || 1,
-        stdout: truncatedStdout,
-        stderr: isTimeout
-          ? `Command timed out after ${maxTimeout / 1000}s. Try a shorter command or increase timeout.`
-          : truncatedStderr,
-        duration,
-        command: trimmedCommand,
-        workspacePath,
-        timedOut: isTimeout,
-      });
-    }
+    return NextResponse.json({
+      success: true,
+      queued: true,
+      runId,
+      workspaceId: targetWorkspace.id,
+      workspacePath,
+      requiresApproval: approvalRequired,
+      exitCode: 0,
+      stdout: approvalRequired
+        ? `Command queued and waiting for approval: ${trimmedCommand}`
+        : `Command queued for worker execution: ${trimmedCommand}`,
+      stderr: '',
+      duration: 0,
+      serverless: isServerless(),
+      command: trimmedCommand,
+      outputLimit: MAX_OUTPUT_LENGTH,
+    });
   } catch (error: any) {
     console.error('[AION Terminal API] Error:', error);
     return NextResponse.json(
@@ -229,46 +154,57 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// ============================================================
-// GET — List workspace directory contents
-// ============================================================
-
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('projectId');
+    const workspaceId = searchParams.get('workspaceId');
     const dirPath = searchParams.get('path') || '';
 
     if (!projectId) {
-      return NextResponse.json(
-        { error: 'projectId is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
     }
 
-    const workspacePath = workspaceManager.getWorkspacePath(projectId);
-    const workspaceExists = await workspaceManager.workspaceExists(projectId);
+    const targetWorkspace = workspaceId
+      ? await boardManager.getWorkspace(workspaceId)
+      : await boardManager.getPrimaryWorkspace(projectId);
 
-    if (!workspaceExists) {
+    if (!targetWorkspace) {
       return NextResponse.json({
         files: [],
-        directories: [],
-        workspacePath,
+        workspacePath: null,
         exists: false,
       });
     }
 
-    // List files in the workspace
-    const files = await workspaceManager.listFiles(projectId, dirPath);
+    const workspacePath = workspaceManager.getRepoWorkspacePath(
+      targetWorkspace.id,
+      targetWorkspace.rootPath
+    );
 
-    // Get workspace info
-    const info = await workspaceManager.getWorkspaceInfo(projectId);
+    let exists = false;
+    try {
+      const info = await workspaceManager.getRepoWorkspaceInfo(targetWorkspace.id);
+      exists = info?.existsOnDisk ?? false;
+    } catch {}
+
+    if (!exists) {
+      return NextResponse.json({
+        files: [],
+        workspacePath,
+        exists: false,
+        workspace: targetWorkspace,
+      });
+    }
+
+    const relativeDir = dirPath === '' ? '' : dirPath;
+    const files = await workspaceManager.listFilesAtPath(workspacePath, relativeDir);
 
     return NextResponse.json({
       files,
       workspacePath,
       exists: true,
-      info,
+      workspace: targetWorkspace,
     });
   } catch (error: any) {
     console.error('[AION Terminal API] GET Error:', error);

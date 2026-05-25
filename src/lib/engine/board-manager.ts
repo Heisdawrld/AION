@@ -3,7 +3,24 @@
 // This is the SINGLE SOURCE OF TRUTH for all project state
 
 import { db } from '@/lib/db';
-import type { PRD, ExecutionPlan, AgentRole, ProjectBoardState, TaskAssignment } from '@/lib/types/aion';
+import type {
+  PRD,
+  ExecutionPlan,
+  AgentRole,
+  ProjectBoardState,
+  TaskAssignment,
+  RepoWorkspaceSummary,
+  ExecutionRunSummary,
+  ApprovalRequestSummary,
+  ExecutionArtifactSummary,
+  WorkspaceStatus,
+  RunKind,
+  RunStatus,
+  RiskLevel,
+  ApprovalStatus,
+  ApprovalType,
+  ArtifactKind,
+} from '@/lib/types/aion';
 
 export class BoardManager {
   /**
@@ -33,6 +50,13 @@ export class BoardManager {
         testResults: true,
         agentLogs: { orderBy: { createdAt: 'desc' }, take: 20 },
         deployments: true,
+        workspaces: true,
+        runs: {
+          where: { status: { in: ['queued', 'awaiting_approval', 'running', 'blocked'] } },
+        },
+        approvals: {
+          where: { status: 'pending' },
+        },
       },
     });
 
@@ -57,6 +81,9 @@ export class BoardManager {
       liveUrl: project.liveUrl,
       totalCycles: project.totalCycles,
       lastActivityAt: project.updatedAt.toISOString(),
+      workspaceCount: project.workspaces.length,
+      activeRunCount: project.runs.length,
+      pendingApprovalCount: project.approvals.length,
     };
   }
 
@@ -446,6 +473,17 @@ export class BoardManager {
       include: {
         tasks: true,
         bugs: { where: { status: 'open' } },
+        workspaces: {
+          orderBy: { updatedAt: 'desc' },
+        },
+        approvals: {
+          where: { status: 'pending' },
+          orderBy: { createdAt: 'desc' },
+        },
+        runs: {
+          where: { status: { in: ['queued', 'awaiting_approval', 'running', 'blocked'] } },
+          orderBy: { createdAt: 'desc' },
+        },
         _count: { select: { files: true, agentLogs: true } },
       },
     });
@@ -464,6 +502,10 @@ export class BoardManager {
         testResults: { orderBy: { id: 'desc' } },
         agentLogs: { orderBy: { id: 'desc' }, take: 50 },
         deployments: { orderBy: { id: 'desc' } },
+        workspaces: { orderBy: { updatedAt: 'desc' } },
+        runs: { orderBy: { createdAt: 'desc' }, take: 50 },
+        approvals: { orderBy: { createdAt: 'desc' }, take: 50 },
+        artifacts: { orderBy: { createdAt: 'desc' }, take: 100 },
       },
     });
   }
@@ -486,6 +528,393 @@ export class BoardManager {
       where: { id: projectId },
       data: { githubRepo: repo },
     });
+  }
+
+  // ============================================================
+  // WORKSPACES / RUNS / APPROVALS / ARTIFACTS
+  // ============================================================
+
+  async createWorkspace(projectId: string, input: {
+    name: string;
+    slug: string;
+    repoUrl?: string;
+    repoProvider?: string;
+    defaultBranch?: string;
+    currentBranch?: string;
+    rootPath?: string;
+    status?: WorkspaceStatus;
+    isPrimary?: boolean;
+  }): Promise<string> {
+    const workspace = await db.repoWorkspace.create({
+      data: {
+        projectId,
+        name: input.name,
+        slug: input.slug,
+        repoUrl: input.repoUrl,
+        repoProvider: input.repoProvider,
+        defaultBranch: input.defaultBranch ?? 'main',
+        currentBranch: input.currentBranch ?? input.defaultBranch ?? 'main',
+        rootPath: input.rootPath,
+        status: input.status ?? 'inactive',
+        isPrimary: input.isPrimary ?? false,
+      },
+    });
+
+    return workspace.id;
+  }
+
+  async listWorkspaces(projectId: string): Promise<RepoWorkspaceSummary[]> {
+    const workspaces = await db.repoWorkspace.findMany({
+      where: { projectId },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    return workspaces.map(workspace => ({
+      id: workspace.id,
+      projectId: workspace.projectId,
+      name: workspace.name,
+      slug: workspace.slug,
+      repoUrl: workspace.repoUrl,
+      repoProvider: workspace.repoProvider,
+      defaultBranch: workspace.defaultBranch,
+      currentBranch: workspace.currentBranch,
+      rootPath: workspace.rootPath,
+      status: workspace.status as WorkspaceStatus,
+      isPrimary: workspace.isPrimary,
+      lastSyncedAt: workspace.lastSyncedAt?.toISOString() ?? null,
+      createdAt: workspace.createdAt.toISOString(),
+      updatedAt: workspace.updatedAt.toISOString(),
+    }));
+  }
+
+  async getWorkspace(workspaceId: string): Promise<RepoWorkspaceSummary | null> {
+    const workspace = await db.repoWorkspace.findUnique({
+      where: { id: workspaceId },
+    });
+
+    if (!workspace) return null;
+
+    return {
+      id: workspace.id,
+      projectId: workspace.projectId,
+      name: workspace.name,
+      slug: workspace.slug,
+      repoUrl: workspace.repoUrl,
+      repoProvider: workspace.repoProvider,
+      defaultBranch: workspace.defaultBranch,
+      currentBranch: workspace.currentBranch,
+      rootPath: workspace.rootPath,
+      status: workspace.status as WorkspaceStatus,
+      isPrimary: workspace.isPrimary,
+      lastSyncedAt: workspace.lastSyncedAt?.toISOString() ?? null,
+      createdAt: workspace.createdAt.toISOString(),
+      updatedAt: workspace.updatedAt.toISOString(),
+    };
+  }
+
+  async getPrimaryWorkspace(projectId: string): Promise<RepoWorkspaceSummary | null> {
+    const workspace = await db.repoWorkspace.findFirst({
+      where: { projectId, isPrimary: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (!workspace) return null;
+
+    return {
+      id: workspace.id,
+      projectId: workspace.projectId,
+      name: workspace.name,
+      slug: workspace.slug,
+      repoUrl: workspace.repoUrl,
+      repoProvider: workspace.repoProvider,
+      defaultBranch: workspace.defaultBranch,
+      currentBranch: workspace.currentBranch,
+      rootPath: workspace.rootPath,
+      status: workspace.status as WorkspaceStatus,
+      isPrimary: workspace.isPrimary,
+      lastSyncedAt: workspace.lastSyncedAt?.toISOString() ?? null,
+      createdAt: workspace.createdAt.toISOString(),
+      updatedAt: workspace.updatedAt.toISOString(),
+    };
+  }
+
+  async updateWorkspace(workspaceId: string, data: {
+    name?: string;
+    repoUrl?: string | null;
+    repoProvider?: string | null;
+    defaultBranch?: string | null;
+    currentBranch?: string | null;
+    rootPath?: string | null;
+    status?: WorkspaceStatus;
+    isPrimary?: boolean;
+    lastSyncedAt?: Date | null;
+  }): Promise<void> {
+    await db.repoWorkspace.update({
+      where: { id: workspaceId },
+      data,
+    });
+  }
+
+  async createRun(projectId: string, input: {
+    workspaceId?: string;
+    agentRole?: AgentRole;
+    kind: RunKind;
+    status?: RunStatus;
+    summary: string;
+    command?: string;
+    requestedBy?: string;
+    approvalRequired?: boolean;
+  }): Promise<string> {
+    const run = await db.executionRun.create({
+      data: {
+        projectId,
+        workspaceId: input.workspaceId,
+        agentRole: input.agentRole,
+        kind: input.kind,
+        status: input.status ?? 'queued',
+        summary: input.summary,
+        command: input.command,
+        requestedBy: input.requestedBy,
+        approvalRequired: input.approvalRequired ?? false,
+      },
+    });
+
+    return run.id;
+  }
+
+  async updateRun(runId: string, data: {
+    status?: RunStatus;
+    summary?: string;
+    command?: string | null;
+    startedAt?: Date | null;
+    completedAt?: Date | null;
+    output?: string | null;
+    error?: string | null;
+  }): Promise<void> {
+    await db.executionRun.update({
+      where: { id: runId },
+      data,
+    });
+  }
+
+  async listRuns(projectId: string, workspaceId?: string): Promise<ExecutionRunSummary[]> {
+    const runs = await db.executionRun.findMany({
+      where: {
+        projectId,
+        ...(workspaceId ? { workspaceId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return runs.map(run => ({
+      id: run.id,
+      projectId: run.projectId,
+      workspaceId: run.workspaceId ?? null,
+      agentRole: run.agentRole as AgentRole | undefined,
+      kind: run.kind as RunKind,
+      status: run.status as RunStatus,
+      summary: run.summary,
+      command: run.command,
+      requestedBy: run.requestedBy,
+      approvalRequired: run.approvalRequired,
+      startedAt: run.startedAt?.toISOString() ?? null,
+      completedAt: run.completedAt?.toISOString() ?? null,
+      output: run.output,
+      error: run.error,
+      createdAt: run.createdAt.toISOString(),
+      updatedAt: run.updatedAt.toISOString(),
+    }));
+  }
+
+  async getRun(runId: string): Promise<ExecutionRunSummary | null> {
+    const run = await db.executionRun.findUnique({
+      where: { id: runId },
+    });
+
+    if (!run) return null;
+
+    return {
+      id: run.id,
+      projectId: run.projectId,
+      workspaceId: run.workspaceId ?? null,
+      agentRole: run.agentRole as AgentRole | undefined,
+      kind: run.kind as RunKind,
+      status: run.status as RunStatus,
+      summary: run.summary,
+      command: run.command,
+      requestedBy: run.requestedBy,
+      approvalRequired: run.approvalRequired,
+      startedAt: run.startedAt?.toISOString() ?? null,
+      completedAt: run.completedAt?.toISOString() ?? null,
+      output: run.output,
+      error: run.error,
+      createdAt: run.createdAt.toISOString(),
+      updatedAt: run.updatedAt.toISOString(),
+    };
+  }
+
+  async claimNextQueuedRun(): Promise<ExecutionRunSummary | null> {
+    const run = await db.executionRun.findFirst({
+      where: {
+        status: 'queued',
+        approvalRequired: false,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!run) return null;
+
+    const claimed = await db.executionRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'running',
+        startedAt: new Date(),
+      },
+    });
+
+    return {
+      id: claimed.id,
+      projectId: claimed.projectId,
+      workspaceId: claimed.workspaceId ?? null,
+      agentRole: claimed.agentRole as AgentRole | undefined,
+      kind: claimed.kind as RunKind,
+      status: claimed.status as RunStatus,
+      summary: claimed.summary,
+      command: claimed.command,
+      requestedBy: claimed.requestedBy,
+      approvalRequired: claimed.approvalRequired,
+      startedAt: claimed.startedAt?.toISOString() ?? null,
+      completedAt: claimed.completedAt?.toISOString() ?? null,
+      output: claimed.output,
+      error: claimed.error,
+      createdAt: claimed.createdAt.toISOString(),
+      updatedAt: claimed.updatedAt.toISOString(),
+    };
+  }
+
+  async createApprovalRequest(projectId: string, input: {
+    workspaceId?: string;
+    runId?: string;
+    type: ApprovalType;
+    riskLevel?: RiskLevel;
+    summary: string;
+    commandPreview?: string;
+    diffSummary?: string;
+    requestedBy?: string;
+  }): Promise<string> {
+    const approval = await db.approvalRequest.create({
+      data: {
+        projectId,
+        workspaceId: input.workspaceId,
+        runId: input.runId,
+        type: input.type,
+        riskLevel: input.riskLevel ?? 'medium',
+        summary: input.summary,
+        commandPreview: input.commandPreview,
+        diffSummary: input.diffSummary,
+        requestedBy: input.requestedBy,
+      },
+    });
+
+    return approval.id;
+  }
+
+  async updateApprovalRequest(approvalId: string, data: {
+    status?: ApprovalStatus;
+    decidedBy?: string | null;
+    decisionReason?: string | null;
+    decidedAt?: Date | null;
+    commandPreview?: string | null;
+    diffSummary?: string | null;
+  }): Promise<void> {
+    await db.approvalRequest.update({
+      where: { id: approvalId },
+      data,
+    });
+  }
+
+  async listApprovalRequests(projectId: string, workspaceId?: string): Promise<ApprovalRequestSummary[]> {
+    const approvals = await db.approvalRequest.findMany({
+      where: {
+        projectId,
+        ...(workspaceId ? { workspaceId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return approvals.map(approval => ({
+      id: approval.id,
+      projectId: approval.projectId,
+      workspaceId: approval.workspaceId ?? null,
+      runId: approval.runId ?? null,
+      type: approval.type as ApprovalType,
+      riskLevel: approval.riskLevel as RiskLevel,
+      status: approval.status as ApprovalStatus,
+      summary: approval.summary,
+      commandPreview: approval.commandPreview,
+      diffSummary: approval.diffSummary,
+      requestedBy: approval.requestedBy,
+      decidedBy: approval.decidedBy,
+      decisionReason: approval.decisionReason,
+      decidedAt: approval.decidedAt?.toISOString() ?? null,
+      createdAt: approval.createdAt.toISOString(),
+      updatedAt: approval.updatedAt.toISOString(),
+    }));
+  }
+
+  async createArtifact(projectId: string, input: {
+    workspaceId?: string;
+    runId?: string;
+    kind: ArtifactKind;
+    title: string;
+    path?: string;
+    contentType?: string;
+    content?: string;
+    metadata?: string;
+    sizeBytes?: number;
+  }): Promise<string> {
+    const artifact = await db.executionArtifact.create({
+      data: {
+        projectId,
+        workspaceId: input.workspaceId,
+        runId: input.runId,
+        kind: input.kind,
+        title: input.title,
+        path: input.path,
+        contentType: input.contentType,
+        content: input.content,
+        metadata: input.metadata,
+        sizeBytes: input.sizeBytes,
+      },
+    });
+
+    return artifact.id;
+  }
+
+  async listArtifacts(projectId: string, workspaceId?: string, runId?: string): Promise<ExecutionArtifactSummary[]> {
+    const artifacts = await db.executionArtifact.findMany({
+      where: {
+        projectId,
+        ...(workspaceId ? { workspaceId } : {}),
+        ...(runId ? { runId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return artifacts.map(artifact => ({
+      id: artifact.id,
+      projectId: artifact.projectId,
+      workspaceId: artifact.workspaceId ?? null,
+      runId: artifact.runId ?? null,
+      kind: artifact.kind as ArtifactKind,
+      title: artifact.title,
+      path: artifact.path,
+      contentType: artifact.contentType,
+      content: artifact.content,
+      metadata: artifact.metadata,
+      sizeBytes: artifact.sizeBytes,
+      createdAt: artifact.createdAt.toISOString(),
+    }));
   }
 
   // ============================================================

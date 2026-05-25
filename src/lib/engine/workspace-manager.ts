@@ -21,12 +21,50 @@ export interface WorkspaceInfo {
   packageJsonExists: boolean;
 }
 
+export interface RepoWorkspaceInfo {
+  workspaceId: string;
+  projectId: string;
+  workspacePath: string;
+  existsOnDisk: boolean;
+  repoUrl: string | null;
+  currentBranch: string | null;
+  defaultBranch: string | null;
+  status: string;
+}
+
 export class WorkspaceManager {
+  private resolveWorkspacePath(baseName: string): string {
+    return path.join(WORKSPACE_ROOT, baseName);
+  }
+
+  private ensureWithinWorkspaceRoot(targetPath: string): string {
+    const normalizedRoot = path.resolve(WORKSPACE_ROOT);
+    const normalizedTarget = path.resolve(targetPath);
+
+    if (!normalizedTarget.startsWith(normalizedRoot)) {
+      throw new Error(`Path escapes workspace root: ${normalizedTarget}`);
+    }
+
+    return normalizedTarget;
+  }
+
   /**
    * Get the workspace path for a project
    */
   getWorkspacePath(projectId: string): string {
-    return path.join(WORKSPACE_ROOT, projectId);
+    return this.resolveWorkspacePath(projectId);
+  }
+
+  /**
+   * Get the workspace path for a repo workspace.
+   * Falls back to the workspace id when no custom root path is set.
+   */
+  getRepoWorkspacePath(workspaceId: string, customRootPath?: string | null): string {
+    const candidate = customRootPath
+      ? this.resolveWorkspacePath(customRootPath)
+      : this.resolveWorkspacePath(workspaceId);
+
+    return this.ensureWithinWorkspaceRoot(candidate);
   }
 
   /**
@@ -216,7 +254,7 @@ export class WorkspaceManager {
    * Write a file to the workspace
    */
   async writeFile(projectId: string, filePath: string, content: string): Promise<void> {
-    const fullPath = path.join(this.getWorkspacePath(projectId), filePath);
+    const fullPath = this.ensureWithinWorkspaceRoot(path.join(this.getWorkspacePath(projectId), filePath));
 
     // Ensure the directory exists
     const dir = path.dirname(fullPath);
@@ -239,7 +277,7 @@ export class WorkspaceManager {
    */
   async readFile(projectId: string, filePath: string): Promise<string | null> {
     try {
-      const fullPath = path.join(this.getWorkspacePath(projectId), filePath);
+      const fullPath = this.ensureWithinWorkspaceRoot(path.join(this.getWorkspacePath(projectId), filePath));
       return await fs.readFile(fullPath, 'utf-8');
     } catch {
       return null;
@@ -251,6 +289,11 @@ export class WorkspaceManager {
    */
   async listFiles(projectId: string, dirPath: string = ''): Promise<string[]> {
     const fullPath = path.join(this.getWorkspacePath(projectId), dirPath);
+    return this.listFilesAtPath(fullPath, dirPath);
+  }
+
+  async listFilesAtPath(basePath: string, dirPath: string = ''): Promise<string[]> {
+    const fullPath = this.ensureWithinWorkspaceRoot(path.join(basePath, dirPath));
 
     try {
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
@@ -263,7 +306,7 @@ export class WorkspaceManager {
         const relativePath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
 
         if (entry.isDirectory()) {
-          const subFiles = await this.listFiles(projectId, relativePath);
+          const subFiles = await this.listFilesAtPath(basePath, relativePath);
           files.push(...subFiles);
         } else {
           files.push(relativePath);
@@ -312,12 +355,58 @@ export class WorkspaceManager {
    * Delete a file from the workspace
    */
   async deleteFile(projectId: string, filePath: string): Promise<void> {
-    const fullPath = path.join(this.getWorkspacePath(projectId), filePath);
+    const fullPath = this.ensureWithinWorkspaceRoot(path.join(this.getWorkspacePath(projectId), filePath));
     try {
       await fs.unlink(fullPath);
     } catch {
       // File might not exist, that's ok
     }
+  }
+
+  async getRepoWorkspaceInfo(workspaceId: string): Promise<RepoWorkspaceInfo | null> {
+    const workspace = await db.repoWorkspace.findUnique({
+      where: { id: workspaceId },
+    });
+
+    if (!workspace) return null;
+
+    const workspacePath = this.getRepoWorkspacePath(workspace.id, workspace.rootPath);
+
+    let existsOnDisk = false;
+    try {
+      await fs.access(workspacePath);
+      existsOnDisk = true;
+    } catch {}
+
+    return {
+      workspaceId: workspace.id,
+      projectId: workspace.projectId,
+      workspacePath,
+      existsOnDisk,
+      repoUrl: workspace.repoUrl,
+      currentBranch: workspace.currentBranch,
+      defaultBranch: workspace.defaultBranch,
+      status: workspace.status,
+    };
+  }
+
+  async createRepoWorkspace(workspaceId: string, customRootPath?: string | null): Promise<string> {
+    const workspacePath = this.getRepoWorkspacePath(workspaceId, customRootPath);
+    await fs.mkdir(workspacePath, { recursive: true });
+    return workspacePath;
+  }
+
+  async updateRepoWorkspacePath(workspaceId: string, customRootPath?: string | null): Promise<string> {
+    const workspacePath = this.getRepoWorkspacePath(workspaceId, customRootPath);
+
+    await db.repoWorkspace.update({
+      where: { id: workspaceId },
+      data: {
+        rootPath: customRootPath ?? workspaceId,
+      },
+    });
+
+    return workspacePath;
   }
 
   /**

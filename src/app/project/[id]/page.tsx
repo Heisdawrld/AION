@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -78,6 +79,69 @@ interface ProjectData {
   testResults: TestResultData[];
   agentLogs: AgentLogData[];
   deployments: DeploymentData[];
+  workspaces: RepoWorkspaceData[];
+  runs: ExecutionRunData[];
+  approvals: ApprovalRequestData[];
+  artifacts: ExecutionArtifactData[];
+}
+
+interface RepoWorkspaceData {
+  id: string;
+  name: string;
+  slug: string;
+  repoUrl: string | null;
+  currentBranch: string | null;
+  defaultBranch: string | null;
+  rootPath: string | null;
+  status: string;
+  isPrimary: boolean;
+  lastSyncedAt: string | null;
+}
+
+interface ExecutionRunData {
+  id: string;
+  workspaceId: string | null;
+  agentRole: string | null;
+  kind: string;
+  status: string;
+  summary: string;
+  command: string | null;
+  requestedBy: string | null;
+  approvalRequired: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  output: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+interface ApprovalRequestData {
+  id: string;
+  workspaceId: string | null;
+  runId: string | null;
+  type: string;
+  riskLevel: string;
+  status: string;
+  summary: string;
+  commandPreview: string | null;
+  diffSummary: string | null;
+  requestedBy: string | null;
+  decidedBy: string | null;
+  decisionReason: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+interface ExecutionArtifactData {
+  id: string;
+  workspaceId: string | null;
+  runId: string | null;
+  kind: string;
+  title: string;
+  path: string | null;
+  contentType: string | null;
+  content: string | null;
+  createdAt: string;
 }
 
 interface TaskData {
@@ -206,6 +270,11 @@ export default function ProjectDashboard() {
   const [isTerminalRunning, setIsTerminalRunning] = useState(false);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('');
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [newWorkspaceRepoUrl, setNewWorkspaceRepoUrl] = useState('');
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
+  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
 
   const fetchProject = useCallback(async () => {
     try {
@@ -213,13 +282,19 @@ export default function ProjectDashboard() {
       if (res.ok) {
         const data = await res.json();
         setProject(data);
+        if (!selectedWorkspaceId) {
+          const primaryWorkspace = data.workspaces?.find((workspace: RepoWorkspaceData) => workspace.isPrimary) || data.workspaces?.[0];
+          if (primaryWorkspace?.id) {
+            setSelectedWorkspaceId(primaryWorkspace.id);
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to fetch project:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, selectedWorkspaceId]);
 
   const fetchQAGate = useCallback(async () => {
     setQaLoading(true);
@@ -239,6 +314,160 @@ export default function ProjectDashboard() {
       setQaLoading(false);
     }
   }, [projectId]);
+
+  const queueTerminalCommand = useCallback(async (cmd: string) => {
+    setIsTerminalRunning(true);
+    try {
+      const res = await fetch('/api/terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          workspaceId: selectedWorkspaceId || undefined,
+          command: cmd,
+        }),
+      });
+      const data = await res.json();
+      setTerminalHistory(prev => [...prev, {
+        command: cmd,
+        output: data.stdout || '',
+        stderr: data.stderr || '',
+        exitCode: data.exitCode ?? 1,
+        duration: data.duration ?? 0,
+        timestamp: new Date().toISOString(),
+        blocked: data.blocked || false,
+      }]);
+      if (data.runId) {
+        setLastMessage(data.requiresApproval
+          ? 'Command queued and waiting for approval.'
+          : 'Command queued for worker execution.');
+      }
+      await fetchProject();
+    } catch (error: any) {
+      setTerminalHistory(prev => [...prev, {
+        command: cmd,
+        output: '',
+        stderr: `Connection error: ${error.message}`,
+        exitCode: 1,
+        duration: 0,
+        timestamp: new Date().toISOString(),
+      }]);
+    } finally {
+      setIsTerminalRunning(false);
+      setTimeout(() => {
+        const el = document.getElementById('terminal-output');
+        if (el) el.scrollTop = el.scrollHeight;
+      }, 50);
+    }
+  }, [fetchProject, projectId, selectedWorkspaceId]);
+
+  const createWorkspace = useCallback(async () => {
+    if (!newWorkspaceName.trim()) return;
+    setIsCreatingWorkspace(true);
+    try {
+      const res = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          name: newWorkspaceName.trim(),
+          repoUrl: newWorkspaceRepoUrl.trim() || undefined,
+          isPrimary: !project?.workspaces?.length,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create workspace');
+      setNewWorkspaceName('');
+      setNewWorkspaceRepoUrl('');
+      if (data.workspace?.id) {
+        setSelectedWorkspaceId(data.workspace.id);
+      }
+      setLastMessage(data.runId
+        ? 'Workspace created and repository clone queued.'
+        : 'Workspace created.');
+      await fetchProject();
+    } catch (error: any) {
+      setLastMessage(`Workspace error: ${error.message}`);
+    } finally {
+      setIsCreatingWorkspace(false);
+    }
+  }, [fetchProject, newWorkspaceName, newWorkspaceRepoUrl, project?.workspaces?.length, projectId]);
+
+  const updateApproval = useCallback(async (approval: ApprovalRequestData, status: 'approved' | 'rejected') => {
+    setApprovalBusyId(approval.id);
+    try {
+      const res = await fetch('/api/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approvalId: approval.id,
+          runId: approval.runId,
+          status,
+          decidedBy: 'user',
+          decisionReason: status === 'rejected' ? 'Rejected from dashboard' : 'Approved from dashboard',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update approval');
+      setLastMessage(status === 'approved' ? 'Approval granted.' : 'Approval rejected.');
+      await fetchProject();
+    } catch (error: any) {
+      setLastMessage(`Approval error: ${error.message}`);
+    } finally {
+      setApprovalBusyId(null);
+    }
+  }, [fetchProject]);
+
+  const queueGitRun = useCallback(async (action: 'status' | 'pull' | 'push') => {
+    const currentSelectedWorkspace =
+      project?.workspaces.find(workspace => workspace.id === selectedWorkspaceId) ||
+      project?.workspaces[0] ||
+      null;
+
+    if (!currentSelectedWorkspace) {
+      setLastMessage('Select a workspace first.');
+      return;
+    }
+
+    const branch = currentSelectedWorkspace.currentBranch || currentSelectedWorkspace.defaultBranch || 'main';
+    const config = {
+      status: {
+        summary: `Git status for ${currentSelectedWorkspace.name}`,
+        command: 'git status --short --branch',
+      },
+      pull: {
+        summary: `Pull latest changes for ${currentSelectedWorkspace.name}`,
+        command: `git pull --ff-only origin ${branch}`,
+      },
+      push: {
+        summary: `Push current branch for ${currentSelectedWorkspace.name}`,
+        command: `git push origin ${branch}`,
+      },
+    }[action];
+
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          workspaceId: currentSelectedWorkspace.id,
+          kind: 'git',
+          summary: config.summary,
+          command: config.command,
+          requestedBy: 'user',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to queue git run');
+      setLastMessage(data.requiresApproval
+        ? 'Git action queued and waiting for approval.'
+        : 'Git action queued.');
+      await fetchProject();
+    } catch (error: any) {
+      setLastMessage(`Git action error: ${error.message}`);
+    }
+  }, [fetchProject, project?.workspaces, projectId, selectedWorkspaceId]);
 
   useEffect(() => {
     fetchProject();
@@ -374,6 +603,8 @@ export default function ProjectDashboard() {
   const completedTasks = project.tasks.filter(t => t.status === 'done').length;
   const totalTasks = project.tasks.length;
   const progressPercent = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+  const selectedWorkspace = project.workspaces.find(workspace => workspace.id === selectedWorkspaceId) || project.workspaces[0] || null;
+  const pendingApprovals = project.approvals.filter(approval => approval.status === 'pending');
 
   // ============================================================
   // QA Gate status helpers
@@ -752,6 +983,9 @@ export default function ProjectDashboard() {
             <TabsTrigger value="agents" className="gap-1">
               <Zap className="w-3 h-3" /> Agents
             </TabsTrigger>
+            <TabsTrigger value="ops" className="gap-1">
+              <GitBranch className="w-3 h-3" /> Ops
+            </TabsTrigger>
             <TabsTrigger value="terminal" className="gap-1">
               <TerminalIcon className="w-3 h-3" /> Terminal
             </TabsTrigger>
@@ -1021,6 +1255,225 @@ export default function ProjectDashboard() {
             </div>
           </TabsContent>
 
+          <TabsContent value="ops">
+            <div className="space-y-4 mt-4">
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <Card className="xl:col-span-1">
+                  <CardHeader>
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <GitBranch className="w-4 h-4" /> Workspaces
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="space-y-2">
+                      {project.workspaces.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No workspaces yet.</div>
+                      ) : (
+                        project.workspaces.map(workspace => (
+                          <button
+                            key={workspace.id}
+                            onClick={() => setSelectedWorkspaceId(workspace.id)}
+                            className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                              selectedWorkspaceId === workspace.id
+                                ? 'border-amber-500/50 bg-amber-500/5'
+                                : 'border-border hover:border-amber-500/30'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium truncate">{workspace.name}</div>
+                                <div className="text-[11px] text-muted-foreground truncate">
+                                  {workspace.repoUrl || workspace.rootPath || workspace.slug}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {workspace.isPrimary && (
+                                  <Badge variant="outline" className="text-[9px]">Primary</Badge>
+                                )}
+                                <Badge variant="secondary" className="text-[9px] capitalize">
+                                  {workspace.status}
+                                </Badge>
+                              </div>
+                            </div>
+                            <div className="mt-2 text-[11px] text-muted-foreground">
+                              Branch: {workspace.currentBranch || workspace.defaultBranch || 'unknown'}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-2">
+                      {selectedWorkspace && (
+                        <>
+                          <div className="text-xs font-medium">Workspace actions</div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <Button size="sm" variant="outline" onClick={() => queueGitRun('status')}>
+                              Status
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => queueGitRun('pull')}>
+                              Pull
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => queueGitRun('push')}>
+                              Push
+                            </Button>
+                          </div>
+                          <Separator />
+                        </>
+                      )}
+
+                      <div className="text-xs font-medium">Create workspace</div>
+                      <Input
+                        value={newWorkspaceName}
+                        onChange={(e) => setNewWorkspaceName(e.target.value)}
+                        placeholder="Workspace name"
+                        className="h-8 text-sm"
+                      />
+                      <Input
+                        value={newWorkspaceRepoUrl}
+                        onChange={(e) => setNewWorkspaceRepoUrl(e.target.value)}
+                        placeholder="Repo URL (optional for now)"
+                        className="h-8 text-sm"
+                      />
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={createWorkspace}
+                        disabled={isCreatingWorkspace || !newWorkspaceName.trim() || project.workspaces.length >= 3}
+                      >
+                        {isCreatingWorkspace ? <Loader2 className="w-3 h-3 animate-spin" /> : <GitBranch className="w-3 h-3" />}
+                        <span className="ml-1">Add Workspace</span>
+                      </Button>
+                      {project.workspaces.length >= 3 && (
+                        <div className="text-[11px] text-muted-foreground">Reached v1 limit of 3 workspaces.</div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="xl:col-span-2">
+                  <CardHeader>
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Shield className="w-4 h-4" /> Approval Queue
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {pendingApprovals.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No pending approvals.</div>
+                    ) : (
+                      pendingApprovals.map(approval => (
+                        <div key={approval.id} className="rounded-lg border border-border p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium">{approval.summary}</div>
+                              <div className="text-[11px] text-muted-foreground capitalize">
+                                {approval.type.replace(/_/g, ' ')} • risk: {approval.riskLevel}
+                              </div>
+                              {approval.commandPreview && (
+                                <pre className="mt-2 rounded-md bg-muted p-2 text-[11px] font-mono whitespace-pre-wrap break-all">
+                                  {approval.commandPreview}
+                                </pre>
+                              )}
+                            </div>
+                            <Badge variant="secondary" className="capitalize">{approval.status}</Badge>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => updateApproval(approval, 'approved')}
+                              disabled={approvalBusyId === approval.id}
+                            >
+                              {approvalBusyId === approval.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                              <span className="ml-1">Approve</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => updateApproval(approval, 'rejected')}
+                              disabled={approvalBusyId === approval.id}
+                            >
+                              <XCircle className="w-3 h-3" />
+                              <span className="ml-1">Reject</span>
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Activity className="w-4 h-4" /> Recent Runs
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {project.runs.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No runs queued yet.</div>
+                    ) : (
+                      project.runs.slice(0, 8).map(run => (
+                        <div key={run.id} className="rounded-lg border border-border p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-medium">{run.summary}</div>
+                            <Badge variant="secondary" className="capitalize">{run.status.replace(/_/g, ' ')}</Badge>
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground capitalize">
+                            {run.kind} {run.workspaceId === selectedWorkspace?.id ? '• selected workspace' : ''}
+                          </div>
+                          {run.command && (
+                            <pre className="mt-2 rounded-md bg-muted p-2 text-[11px] font-mono whitespace-pre-wrap break-all">
+                              {run.command}
+                            </pre>
+                          )}
+                          {(run.output || run.error) && (
+                            <div className="mt-2 text-[11px] text-muted-foreground line-clamp-3 whitespace-pre-wrap">
+                              {run.error || run.output}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Package className="w-4 h-4" /> Recent Artifacts
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {project.artifacts.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No artifacts yet.</div>
+                    ) : (
+                      project.artifacts.slice(0, 8).map(artifact => (
+                        <div key={artifact.id} className="rounded-lg border border-border p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-medium">{artifact.title}</div>
+                            <Badge variant="outline" className="capitalize">{artifact.kind.replace(/_/g, ' ')}</Badge>
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {new Date(artifact.createdAt).toLocaleString()}
+                          </div>
+                          {artifact.content && (
+                            <pre className="mt-2 rounded-md bg-muted p-2 text-[11px] font-mono whitespace-pre-wrap break-all line-clamp-4">
+                              {artifact.content}
+                            </pre>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </TabsContent>
+
           {/* ====== Terminal Tab ====== */}
           <TabsContent value="terminal">
             <div className="mt-4">
@@ -1117,42 +1570,7 @@ export default function ProjectDashboard() {
                         setCommandHistory(prev => [...prev, cmd]);
                         setHistoryIndex(-1);
 
-                        // Execute the command
-                        setIsTerminalRunning(true);
-                        fetch('/api/terminal', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ projectId, command: cmd }),
-                        })
-                          .then(res => res.json())
-                          .then(data => {
-                            setTerminalHistory(prev => [...prev, {
-                              command: cmd,
-                              output: data.stdout || '',
-                              stderr: data.stderr || '',
-                              exitCode: data.exitCode ?? 1,
-                              duration: data.duration ?? 0,
-                              timestamp: new Date().toISOString(),
-                              blocked: data.blocked || false,
-                            }]);
-                            setIsTerminalRunning(false);
-                            // Auto-scroll terminal output
-                            setTimeout(() => {
-                              const el = document.getElementById('terminal-output');
-                              if (el) el.scrollTop = el.scrollHeight;
-                            }, 50);
-                          })
-                          .catch(error => {
-                            setTerminalHistory(prev => [...prev, {
-                              command: cmd,
-                              output: '',
-                              stderr: `Connection error: ${error.message}`,
-                              exitCode: 1,
-                              duration: 0,
-                              timestamp: new Date().toISOString(),
-                            }]);
-                            setIsTerminalRunning(false);
-                          });
+                        queueTerminalCommand(cmd);
                       }
                       // Command history navigation
                       if (e.key === 'ArrowUp') {
@@ -1177,7 +1595,7 @@ export default function ProjectDashboard() {
                         }
                       }
                     }}
-                    placeholder={isTerminalRunning ? 'Running...' : 'Type a command...'}
+                    placeholder={isTerminalRunning ? 'Queueing...' : 'Type a command...'}
                     className="flex-1 bg-transparent text-gray-200 font-mono text-sm focus:outline-none placeholder:text-gray-600"
                     disabled={isTerminalRunning}
                     autoComplete="off"
@@ -1193,40 +1611,7 @@ export default function ProjectDashboard() {
                         setTerminalInput('');
                         setCommandHistory(prev => [...prev, cmd]);
                         setHistoryIndex(-1);
-                        setIsTerminalRunning(true);
-                        fetch('/api/terminal', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ projectId, command: cmd }),
-                        })
-                          .then(res => res.json())
-                          .then(data => {
-                            setTerminalHistory(prev => [...prev, {
-                              command: cmd,
-                              output: data.stdout || '',
-                              stderr: data.stderr || '',
-                              exitCode: data.exitCode ?? 1,
-                              duration: data.duration ?? 0,
-                              timestamp: new Date().toISOString(),
-                              blocked: data.blocked || false,
-                            }]);
-                            setIsTerminalRunning(false);
-                            setTimeout(() => {
-                              const el = document.getElementById('terminal-output');
-                              if (el) el.scrollTop = el.scrollHeight;
-                            }, 50);
-                          })
-                          .catch(error => {
-                            setTerminalHistory(prev => [...prev, {
-                              command: cmd,
-                              output: '',
-                              stderr: `Connection error: ${error.message}`,
-                              exitCode: 1,
-                              duration: 0,
-                              timestamp: new Date().toISOString(),
-                            }]);
-                            setIsTerminalRunning(false);
-                          });
+                        queueTerminalCommand(cmd);
                       }
                     }}
                     disabled={isTerminalRunning || !terminalInput.trim()}
@@ -1263,10 +1648,10 @@ export default function ProjectDashboard() {
 
               {/* Terminal Info */}
               <div className="mt-3 flex items-center gap-4 text-[11px] text-muted-foreground">
-                <span>Commands run in project workspace directory</span>
+                <span>Workspace: {selectedWorkspace?.name || 'Primary Workspace'}</span>
                 <span>Max timeout: 120s</span>
                 <span>Output truncated at 100KB</span>
-                <span className="text-yellow-600 dark:text-yellow-400">Dangerous commands are blocked</span>
+                <span className="text-yellow-600 dark:text-yellow-400">Sensitive commands require approval</span>
               </div>
             </div>
           </TabsContent>

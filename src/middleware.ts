@@ -19,6 +19,10 @@ const PROTECTED_ROUTES = [
   '/api/project',
   '/api/terminal',
   '/api/cost',
+  '/api/workspace',
+  '/api/run',
+  '/api/approval',
+  '/api/worker',
 ];
 
 export function middleware(request: NextRequest) {
