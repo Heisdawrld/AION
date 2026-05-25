@@ -90,9 +90,17 @@ export default function AIONHome() {
     setProjectStatus('processing');
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const apiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
+      if (apiKey) {
+        headers['x-aion-api-key'] = apiKey;
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           message: input.trim(),
           projectId,
@@ -100,7 +108,8 @@ export default function AIONHome() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Request failed (${response.status})`);
       }
 
       const data = await response.json();
@@ -168,9 +177,17 @@ export default function AIONHome() {
     setProjectStatus('processing');
 
     try {
+      const continueHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const continueApiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
+      if (continueApiKey) {
+        continueHeaders['x-aion-api-key'] = continueApiKey;
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: continueHeaders,
         body: JSON.stringify({
           message: 'Continue building. What\'s next?',
           projectId,
@@ -242,7 +259,15 @@ export default function AIONHome() {
     setCurrentAgent(null);
 
     try {
-      const response = await fetch(`/api/orchestrate/stream?projectId=${projectId}&steps=5`);
+      const streamHeaders: Record<string, string> = {};
+      const streamApiKey = process.env.NEXT_PUBLIC_AION_API_KEY;
+      if (streamApiKey) {
+        streamHeaders['x-aion-api-key'] = streamApiKey;
+      }
+
+      const response = await fetch(`/api/orchestrate/stream?projectId=${projectId}&steps=5`, {
+        headers: streamHeaders,
+      });
 
       if (!response.ok || !response.body) {
         throw new Error('Failed to connect to stream');

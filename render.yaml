@@ -28,4 +28,6 @@ services:
         sync: false  # Set to your Turso auth token
       - key: AION_API_KEY
         sync: false  # Generate with: openssl rand -hex 32
+      - key: NEXT_PUBLIC_AION_API_KEY
+        sync: false  # Same value as AION_API_KEY (needed by the browser)
     healthCheckPath: /api/health
