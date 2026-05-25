@@ -22,22 +22,32 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # --- Database (Turso) ---
       - key: DATABASE_URL
         sync: false  # Turso URL: libsql://aion-xxxx.turso.io
       - key: DATABASE_AUTH_TOKEN
         sync: false  # Turso auth token
+      # --- API Authentication ---
       - key: AION_API_KEY
         sync: false  # Generate with: openssl rand -hex 32
       - key: NEXT_PUBLIC_AION_API_KEY
         sync: false  # Same value as AION_API_KEY (needed by the browser)
+      # --- AI Provider: OpenAI (recommended for Render) ---
+      - key: OPENAI_API_KEY
+        sync: false  # Your OpenAI API key (sk-...)
+      - key: OPENAI_BASE_URL
+        sync: false  # Optional: custom OpenAI-compatible endpoint
+      - key: OPENAI_MODEL
+        sync: false  # Optional: model name (default: gpt-4o-mini)
+      # --- AI Provider: z-ai-web-dev-sdk (only works inside Z.ai) ---
       - key: ZAI_BASE_URL
-        sync: false  # z-ai-web-dev-sdk base URL
+        sync: false
       - key: ZAI_API_KEY
-        sync: false  # z-ai-web-dev-sdk API key
+        sync: false
       - key: ZAI_TOKEN
-        sync: false  # z-ai-web-dev-sdk auth token
+        sync: false
       - key: ZAI_CHAT_ID
-        sync: false  # z-ai-web-dev-sdk chat ID
+        sync: false
       - key: ZAI_USER_ID
-        sync: false  # z-ai-web-dev-sdk user ID
+        sync: false
     healthCheckPath: /api/health
