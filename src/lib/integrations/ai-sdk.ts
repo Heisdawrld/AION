@@ -1,17 +1,14 @@
 // AION — AI SDK Wrapper (Enhanced)
 // Wraps z-ai-web-dev-sdk for structured agent calls
 // Enhanced with robust JSON extraction and retry logic
+// Auto-creates .z-ai-config from env vars if missing (for production/Render)
 
 import ZAI from 'z-ai-web-dev-sdk';
+import { getZAI } from '@/lib/integrations/zai-helper';
 import type { AgentRole } from '@/lib/types/aion';
 
-let zaiInstance: ZAI | null = null;
-
 async function getAI(): Promise<ZAI> {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
+  return getZAI();
 }
 
 export interface AICallOptions {

@@ -16,6 +16,7 @@ import type {
 import { headlessBrowser } from '@/lib/engine/headless-browser';
 import { agentMemory } from '@/lib/engine/agent-memory';
 import ZAI from 'z-ai-web-dev-sdk';
+import { getZAI } from '@/lib/integrations/zai-helper';
 
 // ============================================================
 // THE RESEARCH ANALYST — IF IT'S ON THE INTERNET, THEY'LL FIND IT
@@ -326,7 +327,7 @@ export class ResearchAnalystAgent extends BaseAgent {
 
   private async webSearch(query: string): Promise<WebSearchResult[]> {
     try {
-      const zai = await ZAI.create();
+      const zai = await getZAI();
       const searchResult = await zai.functions.invoke('web_search', {
         query,
         num: 10,
@@ -353,7 +354,7 @@ export class ResearchAnalystAgent extends BaseAgent {
 
   private async scrapeUrl(url: string): Promise<ScrapedContent | null> {
     try {
-      const zai = await ZAI.create();
+      const zai = await getZAI();
       const result = await zai.functions.invoke('page_reader', { url });
 
       if (!result || !result.data) return null;

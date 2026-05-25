@@ -3,6 +3,7 @@
 // Uses z-ai-web-dev-sdk's page_reader for web page reading.
 
 import ZAI from 'z-ai-web-dev-sdk';
+import { getZAI } from '@/lib/integrations/zai-helper';
 
 // ============================================================
 // EXPORTED TYPES
@@ -97,7 +98,7 @@ export class HeadlessBrowser {
 
   private async getZAI(): Promise<ZAI> {
     if (!this.zaiInstance) {
-      this.zaiInstance = await ZAI.create();
+      this.zaiInstance = await getZAI();
     }
     return this.zaiInstance;
   }
