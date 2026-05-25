@@ -43,7 +43,8 @@ export abstract class BaseAgent {
       systemPrompt: this.systemPrompt,
       userMessage,
       temperature: 0.3,
-      maxTokens: 8192, // More tokens for code generation
+      maxTokens: 2048,
+      agentRole: this.role, // Hybrid Brain routing
     });
 
     // If JSON parsing succeeded, return it
@@ -131,7 +132,8 @@ export abstract class BaseAgent {
       systemPrompt: customSystemPrompt,
       userMessage,
       temperature: 0.4, // Slightly higher for conversational personality
-      maxTokens: 8192,
+      maxTokens: 2048,
+      agentRole: this.role, // Hybrid Brain routing
     });
 
     if (result.data) {

@@ -28,6 +28,7 @@ import type {
 const MAX_CYCLES = 100;
 const MIN_CONFIDENCE = 0.4; // Lowered to allow agents to proceed with moderate confidence
 const MAX_SAME_AGENT_REPEATS = 4; // If same agent runs same action 4+ times, we're stuck
+const MAX_AGENT_LOOPS = 5; // Max back-and-forth between agents before forcing halt
 const DEPENDENCY_INSTALL_COOLDOWN = 60_000; // 1 min between auto-installs
 
 export interface OrchestratorResult {
