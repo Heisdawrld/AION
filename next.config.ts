@@ -2,14 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   reactStrictMode: false,
-  allowedDevOrigins: [
-    '.space-z.ai',
-    '.space.chatglm.site',
-    'localhost',
-  ],
 };
 
 export default nextConfig;
