@@ -1,82 +1,20 @@
-// AION — AI SDK Wrapper (Hybrid Brain Architecture)
-// Routes different agent roles to different AI models based on complexity.
-// Inspired by Gemini's "Hybrid Brain" recommendation:
-//   - CTO/Architect → heavy model (Gemini Flash / Llama 70B)
-//   - Coders → fast model (Llama 70B on Groq)
-//   - Reviewers/Testers → light model (Llama 8B / Flash-Lite)
+// AION — AI SDK Wrapper
+// Uses the Multi-Provider AI Router for reliable, scalable AI calls.
+// Falls back to ZAI SDK when no OpenAI-compatible providers are configured.
 //
-// Configure via env vars:
-//   OPENAI_API_KEY - primary provider key (Groq, Gemini, OpenAI, etc.)
-//   OPENAI_BASE_URL - primary provider endpoint
-//   OPENAI_MODEL - default model for medium-complexity agents
-//   OPENAI_HEAVY_API_KEY - key for heavy reasoning (CTO, Architect)
-//   OPENAI_HEAVY_BASE_URL - endpoint for heavy model
-//   OPENAI_HEAVY_MODEL - model for CTO/Architect (e.g., gemini-2.0-flash)
-//   OPENAI_LIGHT_API_KEY - key for light tasks (Reviewers, QA)
-//   OPENAI_LIGHT_BASE_URL - endpoint for light model
-//   OPENAI_LIGHT_MODEL - model for reviewers (e.g., llama-3.1-8b-instant)
+// The router automatically:
+//   - Routes agent calls to the best available provider per tier
+//   - Fails over on 429/rate-limit errors
+//   - Tracks rate limit recovery times
+//   - Round-robins to distribute load
+//
+// Configure providers by setting API keys:
+//   GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, SAMBANOVA_API_KEY, OPENROUTER_API_KEY
+// Or legacy: OPENAI_API_KEY + OPENAI_BASE_URL
 
-import ZAI from 'z-ai-web-dev-sdk';
-import { getZAI } from '@/lib/integrations/zai-helper';
+import { routerCall, getRouterStatus } from './ai-router';
+import { getZAI } from './zai-helper';
 import type { AgentRole } from '@/lib/types/aion';
-
-// ============================================================
-// HYBRID BRAIN MODEL ROUTING
-// ============================================================
-
-type AgentTier = 'heavy' | 'medium' | 'light';
-
-const HEAVY_AGENTS: AgentRole[] = ['cto', 'business']; // High reasoning
-const MEDIUM_AGENTS: AgentRole[] = ['frontend', 'backend', 'devops', 'design', 'integration']; // Code generation
-const LIGHT_AGENTS: AgentRole[] = ['qa', 'security', 'performance', 'docs', 'data', 'analytics', 'compliance', 'research']; // Review/analysis
-
-function getAgentTier(agentRole?: AgentRole): AgentTier {
-  if (!agentRole) return 'medium';
-  if (HEAVY_AGENTS.includes(agentRole)) return 'heavy';
-  if (LIGHT_AGENTS.includes(agentRole)) return 'light';
-  return 'medium';
-}
-
-interface ModelConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
-
-function getModelForTier(tier: AgentTier): ModelConfig {
-  switch (tier) {
-    case 'heavy':
-      return {
-        apiKey: process.env.OPENAI_HEAVY_API_KEY || process.env.OPENAI_API_KEY || '',
-        baseUrl: process.env.OPENAI_HEAVY_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-        model: process.env.OPENAI_HEAVY_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      };
-    case 'light':
-      return {
-        apiKey: process.env.OPENAI_LIGHT_API_KEY || process.env.OPENAI_API_KEY || '',
-        baseUrl: process.env.OPENAI_LIGHT_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-        model: process.env.OPENAI_LIGHT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      };
-    case 'medium':
-    default:
-      return {
-        apiKey: process.env.OPENAI_API_KEY || '',
-        baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      };
-  }
-}
-
-// Detect primary provider
-type AIProvider = 'zai' | 'openai';
-
-function detectProvider(): AIProvider {
-  if (process.env.OPENAI_API_KEY) return 'openai';
-  return 'zai';
-}
-
-const provider = detectProvider();
-console.log(`[AION AI] Using provider: ${provider}`);
 
 // ============================================================
 // INTERFACES
@@ -87,7 +25,7 @@ export interface AICallOptions {
   userMessage: string;
   maxTokens?: number;
   temperature?: number;
-  agentRole?: AgentRole; // Used for hybrid brain routing
+  agentRole?: AgentRole;
 }
 
 export interface AICallResult {
@@ -96,73 +34,80 @@ export interface AICallResult {
     promptTokens?: number;
     completionTokens?: number;
   };
-  duration: number; // ms
+  duration: number;
+  provider?: string;
+  model?: string;
 }
 
 // ============================================================
-// OPENAI-COMPATIBLE PROVIDER (Direct fetch — works with any provider)
+// PROVIDER DETECTION
 // ============================================================
 
-async function callOpenAI(options: AICallOptions): Promise<AICallResult> {
-  const startTime = Date.now();
-  const tier = getAgentTier(options.agentRole);
-  const config = getModelForTier(tier);
+function hasOpenAIProviders(): boolean {
+  // Check if any OpenAI-compatible provider keys are set
+  return !!(
+    process.env.GROQ_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.CEREBRAS_API_KEY ||
+    process.env.SAMBANOVA_API_KEY ||
+    process.env.OPENROUTER_API_KEY ||
+    process.env.OPENAI_API_KEY
+  );
+}
 
-  if (!config.apiKey) {
-    throw new Error('No API key configured. Set OPENAI_API_KEY env var.');
+// Initialize and log on first import
+let providerLogged = false;
+function logProviderStatus(): void {
+  if (providerLogged) return;
+  providerLogged = true;
+
+  if (hasOpenAIProviders()) {
+    const status = getRouterStatus();
+    console.log(`[AION AI] Multi-provider router active: ${status.providers.join(', ')} (${status.healthyEndpoints} endpoints)`);
+  } else if (process.env.ZAI_BASE_URL || process.env.ZAI_API_KEY) {
+    console.log('[AION AI] Using ZAI SDK (z-ai-web-dev-sdk)');
+  } else {
+    console.error('[AION AI] WARNING: No AI providers configured! Set GROQ_API_KEY, GEMINI_API_KEY, etc.');
   }
+}
 
-  // Adjust max_tokens by tier
-  const maxTokensByTier: Record<AgentTier, number> = {
-    heavy: 2048,
-    medium: 1536,
-    light: 1024,
-  };
+// ============================================================
+// MAIN AI CALL — Routes through router or ZAI
+// ============================================================
 
-  try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: options.systemPrompt },
-          { role: 'user', content: options.userMessage },
-        ],
-        max_tokens: options.maxTokens || maxTokensByTier[tier],
-        temperature: options.temperature ?? (tier === 'heavy' ? 0.4 : 0.3),
-      }),
+/**
+ * Call the AI model with structured prompts.
+ * This is the ONLY way agents should interact with AI.
+ * Auto-selects provider and model based on agent role (Hybrid Brain).
+ * Automatically fails over to next provider on rate limits.
+ */
+export async function callAI(options: AICallOptions): Promise<AICallResult> {
+  logProviderStatus();
+
+  if (hasOpenAIProviders()) {
+    const result = await routerCall({
+      systemPrompt: options.systemPrompt,
+      userMessage: options.userMessage,
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      agentRole: options.agentRole,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API error (${response.status}): ${errorText}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    const duration = Date.now() - startTime;
-
     return {
-      content,
-      usage: {
-        promptTokens: data.usage?.prompt_tokens,
-        completionTokens: data.usage?.completion_tokens,
-      },
-      duration,
+      content: result.content,
+      usage: result.usage,
+      duration: result.duration,
+      provider: result.provider,
+      model: result.model,
     };
-  } catch (error: any) {
-    const duration = Date.now() - startTime;
-    console.error(`[AION AI] ${tier}/${config.model} error:`, error.message);
-    throw new Error(`AI call failed: ${error.message}`);
   }
+
+  // Fallback to ZAI SDK
+  return callZAI(options);
 }
 
 // ============================================================
-// ZAI PROVIDER (z-ai-web-dev-sdk — only works inside Z.ai)
+// ZAI FALLBACK — Only used when no OpenAI-compatible providers
 // ============================================================
 
 async function callZAI(options: AICallOptions): Promise<AICallResult> {
@@ -198,20 +143,8 @@ async function callZAI(options: AICallOptions): Promise<AICallResult> {
 }
 
 // ============================================================
-// UNIFIED AI CALL (auto-selects provider + model by agent tier)
+// JSON EXTRACTION — Robust parsing of AI responses
 // ============================================================
-
-/**
- * Call the AI model with structured prompts.
- * This is the ONLY way agents should interact with AI.
- * Auto-selects provider and model based on agent role (Hybrid Brain).
- */
-export async function callAI(options: AICallOptions): Promise<AICallResult> {
-  if (provider === 'openai') {
-    return callOpenAI(options);
-  }
-  return callZAI(options);
-}
 
 /**
  * Extract JSON from a potentially messy AI response.
@@ -300,6 +233,10 @@ function extractJSON(raw: string): string | null {
   return null;
 }
 
+// ============================================================
+// JSON AI CALL — For structured agent output
+// ============================================================
+
 /**
  * Call AI and parse the response as JSON.
  * Enhanced with robust extraction and automatic retry.
@@ -355,3 +292,8 @@ export async function callAIForText(systemPrompt: string, userMessage: string): 
   const result = await callAI({ systemPrompt, userMessage, maxTokens: 1024 });
   return result.content;
 }
+
+/**
+ * Get current router status for debugging
+ */
+export { getRouterStatus };

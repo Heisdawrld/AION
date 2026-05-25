@@ -10,11 +10,15 @@
 # 6. Set environment variables (see below)
 # 7. Deploy!
 #
-# HYBRID BRAIN ARCHITECTURE:
-# Different agents use different models based on task complexity.
-# CTO/Business → Heavy model (Gemini Flash or Llama 70B)
-# Coders       → Medium model (Llama 70B on Groq)
-# Reviewers    → Light model (Llama 8B or Flash-Lite)
+# MULTI-PROVIDER AI ROUTER:
+# Add as many free API keys as you can — the router pools them all!
+# More keys = more capacity = fewer rate limits.
+#
+# Free providers:
+#   - Groq:      https://console.groq.com/keys         (llama-3.3-70b, 30 RPM)
+#   - Gemini:    https://aistudio.google.com/apikey     (gemini-2.0-flash, 15 RPM)
+#   - Cerebras:  https://cloud.cerebras.ai/             (llama-3.3-70b, free)
+#   - Sambanova: https://cloud.sambanova.ai/            (llama-3.3-70b, free)
 
 services:
   - type: web
@@ -38,25 +42,27 @@ services:
         sync: false  # Generate with: openssl rand -hex 32
       - key: NEXT_PUBLIC_AION_API_KEY
         sync: false  # Same value as AION_API_KEY (needed by browser)
-      # --- AI: Medium tier (default — coders, general tasks) ---
+      # --- AI Providers (add as many as you can!) ---
+      # Groq (free — 30 RPM, fast inference)
+      - key: GROQ_API_KEY
+        sync: false  # gsk_...
+      # Google Gemini (free — 15 RPM, best reasoning)
+      - key: GEMINI_API_KEY
+        sync: false  # AIza...
+      # Cerebras (free — ultra-fast inference)
+      - key: CEREBRAS_API_KEY
+        sync: false  # csj-...
+      # Sambanova (free — ultra-fast inference)
+      - key: SAMBANOVA_API_KEY
+        sync: false  # sna-...
+      # OpenRouter (has free models)
+      - key: OPENROUTER_API_KEY
+        sync: false  # sk-or-...
+      # --- Legacy single-provider (still works) ---
       - key: OPENAI_API_KEY
-        sync: false  # Groq key: gsk_...
+        sync: false  # Any OpenAI-compatible key
       - key: OPENAI_BASE_URL
-        sync: false  # https://api.groq.com/openai/v1
+        sync: false  # Optional: custom endpoint
       - key: OPENAI_MODEL
-        sync: false  # llama-3.3-70b-versatile
-      # --- AI: Heavy tier (CTO, Business Strategist) ---
-      - key: OPENAI_HEAVY_API_KEY
-        sync: false  # Optional: separate key for heavy model
-      - key: OPENAI_HEAVY_BASE_URL
-        sync: false  # Optional: e.g. https://generativelanguage.googleapis.com/v1beta/openai
-      - key: OPENAI_HEAVY_MODEL
-        sync: false  # Optional: e.g. gemini-2.0-flash
-      # --- AI: Light tier (QA, Security, Reviewers) ---
-      - key: OPENAI_LIGHT_API_KEY
-        sync: false  # Optional: separate key for light model
-      - key: OPENAI_LIGHT_BASE_URL
-        sync: false  # Optional: e.g. https://api.groq.com/openai/v1
-      - key: OPENAI_LIGHT_MODEL
-        sync: false  # Optional: e.g. llama-3.1-8b-instant
+        sync: false  # Optional: custom model name
     healthCheckPath: /api/health
