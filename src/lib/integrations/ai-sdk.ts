@@ -68,7 +68,7 @@ async function callOpenAI(options: AICallOptions): Promise<AICallResult> {
           { role: 'system', content: options.systemPrompt },
           { role: 'user', content: options.userMessage },
         ],
-        max_tokens: options.maxTokens || 4096,
+        max_tokens: options.maxTokens || 2048,
         temperature: options.temperature ?? 0.3,
       }),
     });
