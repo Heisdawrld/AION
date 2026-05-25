@@ -14,7 +14,7 @@
     "db:migrate:deploy": "npx prisma@6.19.3 migrate deploy",
     "db:reset": "npx prisma@6.19.3 migrate reset",
     "render-build": "npx prisma@6.19.3 generate && next build",
-    "render-start": "npx prisma@6.19.3 db push && next start"
+    "render-start": "node scripts/db-push-turso.js && node scripts/create-zai-config.js && next start"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

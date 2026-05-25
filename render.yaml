@@ -23,11 +23,21 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        sync: false  # Set to your Turso URL: libsql://aion-xxxx.turso.io
+        sync: false  # Turso URL: libsql://aion-xxxx.turso.io
       - key: DATABASE_AUTH_TOKEN
-        sync: false  # Set to your Turso auth token
+        sync: false  # Turso auth token
       - key: AION_API_KEY
         sync: false  # Generate with: openssl rand -hex 32
       - key: NEXT_PUBLIC_AION_API_KEY
         sync: false  # Same value as AION_API_KEY (needed by the browser)
+      - key: ZAI_BASE_URL
+        sync: false  # z-ai-web-dev-sdk base URL
+      - key: ZAI_API_KEY
+        sync: false  # z-ai-web-dev-sdk API key
+      - key: ZAI_TOKEN
+        sync: false  # z-ai-web-dev-sdk auth token
+      - key: ZAI_CHAT_ID
+        sync: false  # z-ai-web-dev-sdk chat ID
+      - key: ZAI_USER_ID
+        sync: false  # z-ai-web-dev-sdk user ID
     healthCheckPath: /api/health
